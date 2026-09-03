@@ -9,6 +9,5 @@
         "build.zig.zon",
         "src",
         "tests",
-        "bench",
     },
 }

@@ -73,7 +73,7 @@ pub const Deserializer = struct {
             else => return error.WrongType,
         };
 
-        if (!Cursor.hasEscapes(raw)) {
+        if (!self.cursor.last_string_has_escape) {
             if (self.borrow_strings) return raw;
             return self.allocator.dupe(u8, raw) catch error.OutOfMemory;
         }

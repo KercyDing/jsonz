@@ -26,6 +26,7 @@ pub const Cursor = struct {
     pos: usize = 0,
     depth: u32 = 0,
     max_depth: u32 = 256,
+    last_string_has_escape: bool = false,
 
     pub inline fn next(self: *Cursor) Error!Token {
         self.skipWhitespace();
@@ -48,9 +49,11 @@ pub const Cursor = struct {
     pub fn peek(self: *Cursor) Error!Token {
         const pos = self.pos;
         const depth = self.depth;
+        const last_string_has_escape = self.last_string_has_escape;
         defer {
             self.pos = pos;
             self.depth = depth;
+            self.last_string_has_escape = last_string_has_escape;
         }
         return self.next();
     }
@@ -115,10 +118,6 @@ pub const Cursor = struct {
         if (self.pos != self.input.len) return error.UnexpectedToken;
     }
 
-    pub fn hasEscapes(value: []const u8) bool {
-        return std.mem.findScalar(u8, value, '\\') != null;
-    }
-
     fn openContainer(self: *Cursor, token: Token) Error!Token {
         if (self.depth == self.max_depth) return error.MaxDepthExceeded;
         self.depth += 1;
@@ -143,6 +142,7 @@ pub const Cursor = struct {
     fn scanString(self: *Cursor) Error![]const u8 {
         self.pos += 1;
         const start = self.pos;
+        self.last_string_has_escape = false;
 
         while (self.pos + 4 <= self.input.len) {
             const a = self.input[self.pos];
@@ -166,6 +166,7 @@ pub const Cursor = struct {
                     return value;
                 },
                 '\\' => {
+                    self.last_string_has_escape = true;
                     self.pos += 1;
                     if (self.pos == self.input.len) return error.UnexpectedEof;
                     switch (self.input[self.pos]) {

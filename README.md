@@ -1,25 +1,32 @@
 # jsonz
 
-A high‑performance JSON serde library written in Zig.
+A high-performance JSON serde library for Zig.
 
 ## Usage
 
-Install [only](https://github.com/KercyDing/only) and [mise](https://github.com/jdx/mise), then:
+```zig
+const std = @import("std");
+const jsonz = @import("jsonz");
 
-```sh
-only build
-only test
+const User = struct {
+    id: u64,
+    name: []const u8,
+};
+
+var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+defer arena.deinit();
+
+const input = "{\"id\":7,\"name\":\"jsonz\"}";
+const user = try jsonz.fromSlice(User, arena.allocator(), input, .{});
+
+const output = try jsonz.toSlice(std.heap.page_allocator, user, .{});
+defer std.heap.page_allocator.free(output);
 ```
 
-Run the same tasks with Zig 0.16:
+`fromSlice` owns decoded strings through the allocator. Use `fromSliceBorrowed` to reuse unescaped input strings, `fromSliceInto` for caller-provided fixed storage, or `parse` for an owned contiguous pool.
 
-```
-only z16 build
-only z16 test
-```
+The project follows Zig `master` by default through `mise.toml`; use `only z16 build` or `only z16 test` for Zig 0.16.
 
-This project follows Zig `master` by default through `mise.toml`; `z16` uses `mise.zig16.toml` for Zig 0.16.
-
-## LICENSE
+## License
 
 [MIT](LICENSE)

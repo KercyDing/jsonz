@@ -1,3 +1,3 @@
 [tools]
-zig = "0.17.0-dev.1963+e00c6c439"
+zig = "master"
 zls = "0.17.0-dev.44+8da87d4f"

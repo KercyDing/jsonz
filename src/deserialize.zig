@@ -1,6 +1,7 @@
 const std = @import("std");
 const kind = @import("kind.zig");
 const cursor_mod = @import("cursor.zig");
+const pool_mod = @import("pool.zig");
 
 const Allocator = std.mem.Allocator;
 const Cursor = cursor_mod.Cursor;
@@ -19,6 +20,22 @@ pub const Options = struct {
     ignore_unknown_fields: bool = false,
     max_depth: u32 = 256,
 };
+
+/// Owns a parsed value and all memory allocated for it.
+pub fn Parsed(comptime T: type) type {
+    return struct {
+        value: T,
+        buffer: []u8,
+        fallback_arena: std.heap.ArenaAllocator,
+        backing_allocator: Allocator,
+
+        pub fn deinit(self: *@This()) void {
+            self.fallback_arena.deinit();
+            self.backing_allocator.free(self.buffer);
+            self.* = undefined;
+        }
+    };
+}
 
 pub const Deserializer = struct {
     cursor: Cursor,
@@ -98,6 +115,24 @@ pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const 
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
     return value;
+}
+
+/// Parses into a contiguous pool released by `Parsed.deinit`.
+pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!Parsed(T) {
+    const buffer = allocator.alloc(u8, @max(input.len, 256)) catch return error.OutOfMemory;
+    errdefer allocator.free(buffer);
+
+    var fallback = std.heap.ArenaAllocator.init(allocator);
+    errdefer fallback.deinit();
+    var pool = pool_mod.Pool.init(buffer, fallback.allocator());
+    const value = try fromSliceWith(T, pool.allocator(), input, options);
+
+    return .{
+        .value = value,
+        .buffer = buffer,
+        .fallback_arena = fallback,
+        .backing_allocator = allocator,
+    };
 }
 
 fn deserializeValue(comptime T: type, deserializer: *Deserializer) Error!T {
@@ -389,4 +424,21 @@ test "integer bounds" {
     try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "-9223372036854775809"));
     try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "-1"));
     try testing.expectError(error.InvalidNumber, fromSlice(u32, testing.allocator, "1.0"));
+}
+
+test "parsed value" {
+    var parsed = try parse([]const []const u8, testing.allocator, "[\"one\",\"two\"]", .{});
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("one", parsed.value[0]);
+    try testing.expectEqualStrings("two", parsed.value[1]);
+}
+
+test "parsed value fallback" {
+    const input = "[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]";
+    var parsed = try parse([]const u128, testing.allocator, input, .{});
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 20), parsed.value.len);
+    try testing.expect(parsed.fallback_arena.queryCapacity() != 0);
 }

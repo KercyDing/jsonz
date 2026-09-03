@@ -50,7 +50,7 @@ test "document round trip" {
     try std.testing.expectEqual(@as(?bool, true), response.statuses[1].possibly_sensitive);
     try std.testing.expectEqual(@as(?bool, null), response.statuses[0].possibly_sensitive);
 
-    const encoded = try jsonz.toSlice(std.testing.allocator, response);
+    const encoded = try jsonz.toSlice(std.testing.allocator, response, .{});
     defer std.testing.allocator.free(encoded);
 
     var roundtrip_arena = std.heap.ArenaAllocator.init(std.testing.allocator);

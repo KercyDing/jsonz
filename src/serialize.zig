@@ -50,11 +50,7 @@ pub const Serializer = struct {
     }
 };
 
-pub fn toSlice(allocator: std.mem.Allocator, value: anytype) ![]u8 {
-    return toSliceWith(allocator, value, .{});
-}
-
-pub fn toSliceWith(allocator: std.mem.Allocator, value: anytype, options: Options) ![]u8 {
+pub fn toSlice(allocator: std.mem.Allocator, value: anytype, options: Options) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
 
@@ -63,11 +59,7 @@ pub fn toSliceWith(allocator: std.mem.Allocator, value: anytype, options: Option
     return output.toOwnedSlice();
 }
 
-pub fn toWriter(writer: *std.Io.Writer, value: anytype) !void {
-    return toWriterWith(writer, value, .{});
-}
-
-pub fn toWriterWith(writer: *std.Io.Writer, value: anytype, options: Options) !void {
+pub fn toWriter(writer: *std.Io.Writer, value: anytype, options: Options) !void {
     var serializer = Serializer.init(writer, options);
     try serializer.serialize(value);
 }
@@ -190,7 +182,7 @@ test "nested values" {
         .name = @as([]const u8, "jsonz"),
         .flags = [_]bool{ true, false },
     };
-    const output = try toSlice(testing.allocator, input);
+    const output = try toSlice(testing.allocator, input, .{});
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings(
@@ -201,7 +193,7 @@ test "nested values" {
 
 test "string escaping" {
     const value: []const u8 = "a\n\"b";
-    const output = try toSlice(testing.allocator, value);
+    const output = try toSlice(testing.allocator, value, .{});
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings("\"a\\n\\\"b\"", output);
@@ -209,7 +201,7 @@ test "string escaping" {
 
 test "external union" {
     const Value = union(enum) { none, number: i32 };
-    const output = try toSlice(testing.allocator, Value{ .number = 42 });
+    const output = try toSlice(testing.allocator, Value{ .number = 42 }, .{});
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings("{\"number\":42}", output);
@@ -217,14 +209,14 @@ test "external union" {
 
 test "field name escaping" {
     const Value = struct { @"quoted\"field": u8 };
-    const output = try toSlice(testing.allocator, Value{ .@"quoted\"field" = 1 });
+    const output = try toSlice(testing.allocator, Value{ .@"quoted\"field" = 1 }, .{});
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings("{\"quoted\\\"field\":1}", output);
 }
 
 test "pretty struct fields" {
-    const output = try toSliceWith(testing.allocator, .{ .value = @as(u8, 1) }, .{ .pretty = true });
+    const output = try toSlice(testing.allocator, .{ .value = @as(u8, 1) }, .{ .pretty = true });
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings("{\n  \"value\": 1\n}", output);

@@ -44,7 +44,7 @@ pub fn main() !void {
     const source = try jsonz.fromSliceWith(Document, source_arena.allocator(), test_data.content, .{
         .ignore_unknown_fields = true,
     });
-    const serialized_sample = try jsonz.toSlice(allocator, source);
+    const serialized_sample = try jsonz.toSlice(allocator, source, .{});
     defer allocator.free(serialized_sample);
 
     try warmup(allocator, source);
@@ -84,7 +84,7 @@ fn warmup(allocator: std.mem.Allocator, source: Document) !void {
         });
         std_arena.deinit();
 
-        const jsonz_encoded = try jsonz.toSlice(allocator, source);
+        const jsonz_encoded = try jsonz.toSlice(allocator, source, .{});
         allocator.free(jsonz_encoded);
         const std_encoded = try std.json.Stringify.valueAlloc(allocator, source, .{});
         allocator.free(std_encoded);
@@ -114,7 +114,7 @@ fn benchParse(
 fn benchJsonzSerialize(allocator: std.mem.Allocator, source: Document) !u64 {
     const start = nowNs();
     for (0..iterations) |_| {
-        const encoded = try jsonz.toSlice(allocator, source);
+        const encoded = try jsonz.toSlice(allocator, source, .{});
         std.mem.doNotOptimizeAway(encoded);
         allocator.free(encoded);
     }

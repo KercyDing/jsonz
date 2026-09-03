@@ -73,6 +73,58 @@ pub const Cursor = struct {
         self.pos += 1;
     }
 
+    pub inline fn readInt(self: *Cursor, comptime T: type) Error!T {
+        self.skipWhitespace();
+        if (self.pos == self.input.len) return error.UnexpectedEof;
+
+        const negative = self.input[self.pos] == '-';
+        if (negative) self.pos += 1;
+        if (self.pos == self.input.len) return error.InvalidNumber;
+
+        var value: u64 = 0;
+        const first = self.input[self.pos];
+        if (first == '0') {
+            self.pos += 1;
+        } else if (first >= '1' and first <= '9') {
+            while (self.pos < self.input.len) {
+                const byte = self.input[self.pos];
+                if (byte < '0' or byte > '9') break;
+                const multiplied = @mulWithOverflow(value, 10);
+                if (multiplied[1] != 0) return error.InvalidNumber;
+                const added = @addWithOverflow(multiplied[0], byte - '0');
+                if (added[1] != 0) return error.InvalidNumber;
+                value = added[0];
+                self.pos += 1;
+            }
+        } else if (!negative) {
+            return error.UnexpectedToken;
+        } else {
+            return error.InvalidNumber;
+        }
+
+        if (self.pos < self.input.len) {
+            const next_byte = self.input[self.pos];
+            if (next_byte == '.' or next_byte == 'e' or next_byte == 'E') return error.InvalidNumber;
+        }
+
+        const int = @typeInfo(T).int;
+        if (int.signedness == .unsigned) {
+            if (negative) return error.InvalidNumber;
+            return std.math.cast(T, value) orelse error.InvalidNumber;
+        }
+
+        const positive_limit: u64 = @intCast(std.math.maxInt(T));
+        if (!negative) {
+            if (value > positive_limit) return error.InvalidNumber;
+            return @intCast(value);
+        }
+
+        const negative_limit = positive_limit + 1;
+        if (value > negative_limit) return error.InvalidNumber;
+        if (value == negative_limit) return std.math.minInt(T);
+        return -@as(T, @intCast(value));
+    }
+
     pub const ContainerStep = enum { end, more };
 
     pub inline fn finishContainer(self: *Cursor, end: u8) Error!ContainerStep {

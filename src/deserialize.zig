@@ -54,6 +54,7 @@ pub const Deserializer = struct {
     }
 
     pub fn deserializeInt(self: *Deserializer, comptime T: type) Error!T {
+        if (comptime @typeInfo(T).int.bits <= 64) return self.cursor.readInt(T);
         return switch (try self.cursor.next()) {
             .number => |raw| std.fmt.parseInt(T, raw, 10) catch error.InvalidNumber,
             else => error.WrongType,
@@ -378,4 +379,14 @@ test "borrowed strings" {
     const input = "\"jsonz\"";
     const value = try fromSliceBorrowed([]const u8, testing.allocator, input);
     try testing.expect(value.ptr == input.ptr + 1);
+}
+
+test "integer bounds" {
+    try testing.expectEqual(std.math.maxInt(u64), try fromSlice(u64, testing.allocator, "18446744073709551615"));
+    try testing.expectEqual(std.math.minInt(i64), try fromSlice(i64, testing.allocator, "-9223372036854775808"));
+    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "18446744073709551616"));
+    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "9223372036854775808"));
+    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "-9223372036854775809"));
+    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "-1"));
+    try testing.expectError(error.InvalidNumber, fromSlice(u32, testing.allocator, "1.0"));
 }

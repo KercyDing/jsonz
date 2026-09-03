@@ -1,0 +1,61 @@
+!version 0.5
+
+[help] Build in debug mode
+[pass] Debug build complete.
+[fail] Debug build failed.
+build():
+    zig build
+
+[help] Run tests
+[pass] Tests passed.
+[fail] Tests failed.
+test():
+    zig build test
+
+[help] Run benchmarks
+[pass] Benchmarks complete.
+[fail] Benchmarks failed.
+bench():
+    zig build bench
+
+[help] Build in release mode
+[desc] Run `only release false` to turn off the strip.
+[pass] Release build complete.
+[fail] Release build failed.
+release(strip = "true"):
+    zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
+
+[help] Zig 0.16 tasks
+group z16 {
+
+    [help] Build in debug mode with Zig 0.16
+    [pass] Zig 0.16 debug build complete.
+    [fail] Zig 0.16 debug build failed.
+    build():
+        mise -E zig16 exec -- zig build
+
+    [help] Run tests with Zig 0.16
+    [pass] Zig 0.16 tests passed.
+    [fail] Zig 0.16 tests failed.
+    test():
+        mise -E zig16 exec -- zig build test
+
+    [help] Build in release mode with Zig 0.16
+    [desc] Run `only z16 release false` to turn off the strip.
+    [pass] Zig 0.16 release build complete.
+    [fail] Zig 0.16 release build failed.
+    release(strip = "true"):
+        mise -E zig16 exec -- zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
+}
+
+[help] Format source and build files
+[pass] Formatting complete.
+[fail] Formatting failed.
+fmt():
+    zig fmt src tests bench build.zig build.zig.zon
+
+[help] Clean cache, build output and packages
+[pass] Clean complete.
+[fail] Clean failed.
+clean():
+    rm -rf .zig-cache zig-out

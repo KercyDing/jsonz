@@ -31,14 +31,19 @@ const User = struct {
     name: []const u8,
 };
 
-var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-defer arena.deinit();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
 
-const input = "{\"id\":7,\"name\":\"jsonz\"}";
-const user = try jsonz.fromSlice(User, arena.allocator(), input, .{});
+    const input = "[{\"id\": 1,\"name\": \"hello\"},{\"id\": 2,\"name\": \"jsonz\"}]";
 
-const output = try jsonz.toSlice(std.heap.page_allocator, user, .{});
-defer std.heap.page_allocator.free(output);
+    const user = try jsonz.fromSlice([]User, allocator, input, .{});
+
+    const output = try jsonz.toSlice(allocator, user, .{
+        .pretty = true,
+    });
+
+    std.debug.print("{s}\n", .{output});
+}
 ```
 
 ### Choose an API

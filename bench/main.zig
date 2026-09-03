@@ -151,12 +151,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
     } else return error.InvalidArguments;
 
     var selected_file: ?[]const u8 = null;
+    var jsonz_only = false;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             printHelp();
             return;
         } else if (std.mem.eql(u8, arg, "--file")) {
             selected_file = args.next() orelse return error.InvalidArguments;
+        } else if (std.mem.eql(u8, arg, "--jsonz-only")) {
+            jsonz_only = true;
         } else return error.InvalidArguments;
     }
 
@@ -188,12 +191,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
             try benchJsonz(input, repeats)
         else
             try benchJsonzTyped(name, input, repeats);
-        const std_time = if (mode == .dynamic)
-            try benchStd(input, repeats)
-        else
-            try benchStdTyped(name, input, repeats);
         printResult("jsonz", jsonz_time, input.len, repeats);
-        printResult("std.json", std_time, input.len, repeats);
+        if (!jsonz_only) {
+            const std_time = if (mode == .dynamic)
+                try benchStd(input, repeats)
+            else
+                try benchStdTyped(name, input, repeats);
+            printResult("std.json", std_time, input.len, repeats);
+        }
     }
 }
 
@@ -202,7 +207,8 @@ fn printHelp() void {
         "usage: jsonz-bench [dynamic|typed] [--file name.json]\n" ++
             "\n  dynamic  parse every dataset into a generic JSON value (default)\n" ++
             "  typed    parse datasets with a known Zig type\n" ++
-            "  --file  run one dataset instead of all datasets\n",
+            "  --file  run one dataset instead of all datasets\n" ++
+            "  --jsonz-only  skip the std.json comparison\n",
         .{},
     );
 }

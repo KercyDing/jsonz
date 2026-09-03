@@ -63,7 +63,8 @@ Development commands use [only](https://github.com/KercyDing/only) and [mise](ht
 ```sh
 only build             # debug build
 only test              # run tests
-only bench             # run benchmarks
+only bench             # dynamic benchmarks
+only bench typed       # typed benchmarks
 only release           # optimized build with symbols stripped
 ```
 

@@ -91,6 +91,11 @@ pub const Deserializer = struct {
             else => return error.WrongType,
         };
 
+        return self.materializeString(raw);
+    }
+
+    /// Materializes the string token most recently returned by the cursor.
+    pub fn materializeString(self: *Deserializer, raw: []const u8) Error![]const u8 {
         if (!self.cursor.last_string_has_escape) {
             if (self.borrow_strings) return raw;
             return self.allocator.dupe(u8, raw) catch error.OutOfMemory;
@@ -453,6 +458,28 @@ test "borrowed strings" {
     const input = "\"jsonz\"";
     const value = try fromSliceBorrowed([]const u8, testing.allocator, input, .{});
     try testing.expect(value.ptr == input.ptr + 1);
+}
+
+test "custom string token" {
+    const StringValue = struct {
+        value: []const u8,
+
+        pub fn jsonzDeserialize(
+            comptime _: type,
+            _: Allocator,
+            deserializer: anytype,
+        ) Error!@This() {
+            const raw = switch (try deserializer.cursor.next()) {
+                .string => |string| string,
+                else => return error.WrongType,
+            };
+            return .{ .value = try deserializer.materializeString(raw) };
+        }
+    };
+
+    const parsed = try fromSlice(StringValue, testing.allocator, "\"json\\nz\"", .{});
+    defer testing.allocator.free(parsed.value);
+    try testing.expectEqualStrings("json\nz", parsed.value);
 }
 
 test "unicode surrogate pair" {

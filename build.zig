@@ -49,6 +49,17 @@ pub fn build(b: *std.Build) void {
     const run_roundtrip_tests = b.addRunArtifact(roundtrip_tests);
     test_step.dependOn(&run_roundtrip_tests.step);
 
+    const fuzzy_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fuzzy.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .imports = &.{.{ .name = "jsonz", .module = jsonz_mod }},
+    });
+    const fuzzy_tests = b.addTest(.{ .root_module = fuzzy_test_mod });
+    const run_fuzzy_tests = b.addRunArtifact(fuzzy_tests);
+    test_step.dependOn(&run_fuzzy_tests.step);
+
     const bench_step = b.step("bench", "Run benchmarks");
     const bench_mode = b.option([]const u8, "mode", "Benchmark mode: dynamic or typed") orelse "dynamic";
     const bench_file = b.option([]const u8, "file", "Run one benchmark dataset") orelse null;

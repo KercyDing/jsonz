@@ -12,6 +12,12 @@ build():
 test():
     zig build test
 
+[help] Run infinite fuzzy tests with the Zig web UI
+[pass] Fuzzy tests stopped.
+[fail] Fuzzy tests failed.
+fuzzy():
+    zig build test --fuzz -Doptimize=ReleaseFast
+
 [help] Run benchmarks
 [desc] Use `only bench typed` to enable typed mode.
 [pass] Benchmarks complete.

@@ -42,12 +42,12 @@ test "document round trip" {
         .ignore_unknown_fields = true,
     });
 
-    try std.testing.expectEqual(@as(usize, 6), response.statuses.len);
-    try std.testing.expectEqual(@as(u32, 6), response.search_metadata.count);
-    try std.testing.expectEqualStrings("zig json", response.search_metadata.query);
-    try std.testing.expectEqualStrings("Alice Zhang", response.statuses[0].user.name);
-    try std.testing.expectEqualStrings("日本語のJSONもテストします", response.statuses[2].text);
-    try std.testing.expectEqual(@as(?bool, true), response.statuses[1].possibly_sensitive);
+    try std.testing.expectEqual(@as(usize, 100), response.statuses.len);
+    try std.testing.expectEqual(@as(u32, 100), response.search_metadata.count);
+    try std.testing.expectEqualStrings("%E4%B8%80", response.search_metadata.query);
+    try std.testing.expectEqualStrings("AYUMI", response.statuses[0].user.name);
+    try std.testing.expectEqualStrings("@longhairxMIURA 朝一ライカス辛目だよw", response.statuses[2].text);
+    try std.testing.expectEqual(@as(?bool, false), response.statuses[1].possibly_sensitive);
     try std.testing.expectEqual(@as(?bool, null), response.statuses[0].possibly_sensitive);
 
     const encoded = try jsonz.toSlice(std.testing.allocator, response, .{});
@@ -58,6 +58,6 @@ test "document round trip" {
     const roundtrip = try jsonz.fromSlice(Document, roundtrip_arena.allocator(), encoded, .{});
 
     try std.testing.expectEqual(response.statuses.len, roundtrip.statuses.len);
-    try std.testing.expectEqual(response.statuses[5].id, roundtrip.statuses[5].id);
-    try std.testing.expectEqualStrings(response.statuses[5].text, roundtrip.statuses[5].text);
+    try std.testing.expectEqual(response.statuses[99].id, roundtrip.statuses[99].id);
+    try std.testing.expectEqualStrings(response.statuses[99].text, roundtrip.statuses[99].text);
 }

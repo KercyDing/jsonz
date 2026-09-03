@@ -233,20 +233,20 @@ fn deserializeSlice(comptime T: type, deserializer: *Deserializer) Error!T {
 }
 
 fn deserializeTuple(comptime T: type, deserializer: *Deserializer) Error!T {
-    const info = @typeInfo(T).@"struct";
+    const fields = comptime kind.structFields(T);
     if (try deserializer.cursor.next() != .array_begin) return error.WrongType;
 
     var result: T = undefined;
-    if (info.field_names.len == 0) {
+    if (fields.len == 0) {
         if (!try deserializer.cursor.isContainerEmpty(']')) return error.WrongType;
         _ = try deserializer.cursor.next();
         return result;
     }
 
-    inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
-        @field(result, name) = try deserializeValue(Field, deserializer);
+    inline for (fields, 0..) |field, index| {
+        @field(result, field.name) = try deserializeValue(field.type, deserializer);
         const step = try deserializer.cursor.finishContainer(']');
-        if (index + 1 == info.field_names.len) {
+        if (index + 1 == fields.len) {
             if (step != .end) return error.WrongType;
         } else if (step != .more) return error.WrongType;
     }
@@ -254,11 +254,11 @@ fn deserializeTuple(comptime T: type, deserializer: *Deserializer) Error!T {
 }
 
 fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
-    const info = @typeInfo(T).@"struct";
+    const fields = comptime kind.structFields(T);
     if (try deserializer.cursor.next() != .object_begin) return error.WrongType;
 
     var result: T = undefined;
-    var seen: [info.field_names.len]bool = @splat(false);
+    var seen: [fields.len]bool = @splat(false);
 
     if (!try deserializer.cursor.isContainerEmpty('}')) {
         while (true) {
@@ -270,10 +270,10 @@ fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
 
             const selector = fieldSelector(raw_key);
             var found = false;
-            inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
-                if (selector == (comptime fieldSelector(name)) and std.mem.eql(u8, raw_key, name)) {
+            inline for (fields, 0..) |field, index| {
+                if (selector == (comptime fieldSelector(field.name)) and std.mem.eql(u8, raw_key, field.name)) {
                     if (seen[index]) return error.UnexpectedToken;
-                    @field(result, name) = try deserializeValue(Field, deserializer);
+                    @field(result, field.name) = try deserializeValue(field.type, deserializer);
                     seen[index] = true;
                     found = true;
                 }
@@ -288,12 +288,12 @@ fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
         _ = try deserializer.cursor.next();
     }
 
-    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, Field, attrs, index| {
+    inline for (fields, 0..) |field, index| {
         if (!seen[index]) {
-            if (comptime attrs.defaultValue(Field)) |default| {
-                @field(result, name) = default;
-            } else if (@typeInfo(Field) == .optional) {
-                @field(result, name) = null;
+            if (comptime field.defaultValue()) |default| {
+                @field(result, field.name) = default;
+            } else if (@typeInfo(field.type) == .optional) {
+                @field(result, field.name) = null;
             } else {
                 return error.MissingField;
             }
@@ -314,21 +314,19 @@ fn deserializeEnum(comptime T: type, deserializer: *Deserializer) Error!T {
         .string => |value| value,
         else => return error.WrongType,
     };
-    const info = @typeInfo(T).@"enum";
-    inline for (info.field_names, info.field_values) |name, value| {
-        if (std.mem.eql(u8, raw, name)) return @fromBackingInt(@intCast(value));
+    inline for (comptime kind.enumFields(T)) |field| {
+        if (std.mem.eql(u8, raw, field.name)) return @enumFromInt(field.value);
     }
     return error.UnexpectedToken;
 }
 
 fn deserializeUnion(comptime T: type, deserializer: *Deserializer) Error!T {
-    const info = @typeInfo(T).@"union";
     const first = try deserializer.cursor.next();
 
     if (first == .string) {
         const name = first.string;
-        inline for (info.field_names, info.field_types) |field_name, Field| {
-            if (Field == void and std.mem.eql(u8, name, field_name)) return @unionInit(T, field_name, {});
+        inline for (comptime kind.unionFields(T)) |field| {
+            if (field.type == void and std.mem.eql(u8, name, field.name)) return @unionInit(T, field.name, {});
         }
         return error.UnexpectedToken;
     }
@@ -340,11 +338,11 @@ fn deserializeUnion(comptime T: type, deserializer: *Deserializer) Error!T {
     };
     try deserializer.cursor.expectColon();
 
-    inline for (info.field_names, info.field_types) |field_name, Field| {
-        if (std.mem.eql(u8, name, field_name)) {
-            const payload = try deserializeValue(Field, deserializer);
+    inline for (comptime kind.unionFields(T)) |field| {
+        if (std.mem.eql(u8, name, field.name)) {
+            const payload = try deserializeValue(field.type, deserializer);
             if (try deserializer.cursor.finishContainer('}') != .end) return error.WrongType;
-            return @unionInit(T, field_name, payload);
+            return @unionInit(T, field.name, payload);
         }
     }
     return error.UnexpectedToken;

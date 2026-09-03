@@ -101,33 +101,33 @@ fn serializeSequence(comptime T: type, value: T, serializer: *Serializer) std.Io
 }
 
 fn serializeTuple(comptime T: type, value: T, serializer: *Serializer) std.Io.Writer.Error!void {
-    const info = @typeInfo(T).@"struct";
+    const fields = comptime kind.structFields(T);
     try serializer.writer.writeByte('[');
     serializer.depth += 1;
 
-    inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
+    inline for (fields, 0..) |field, index| {
         if (index != 0) try serializer.writer.writeByte(',');
         try serializer.newline();
-        try serializeValue(Field, @field(value, name), serializer);
+        try serializeValue(field.type, @field(value, field.name), serializer);
     }
 
     serializer.depth -= 1;
-    if (info.field_names.len != 0) try serializer.newline();
+    if (fields.len != 0) try serializer.newline();
     try serializer.writer.writeByte(']');
 }
 
 fn serializeStruct(comptime T: type, value: T, serializer: *Serializer) std.Io.Writer.Error!void {
-    const info = @typeInfo(T).@"struct";
+    const fields = comptime kind.structFields(T);
     try serializer.writer.writeByte('{');
     serializer.depth += 1;
 
-    inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
-        try writeFieldPrefix(name, index == 0, serializer);
-        try serializeValue(Field, @field(value, name), serializer);
+    inline for (fields, 0..) |field, index| {
+        try writeFieldPrefix(field.name, index == 0, serializer);
+        try serializeValue(field.type, @field(value, field.name), serializer);
     }
 
     serializer.depth -= 1;
-    if (info.field_names.len != 0) try serializer.newline();
+    if (fields.len != 0) try serializer.newline();
     try serializer.writer.writeByte('}');
 }
 
@@ -135,14 +135,14 @@ fn serializeUnion(comptime T: type, value: T, serializer: *Serializer) std.Io.Wr
     const info = @typeInfo(T).@"union";
     const tag = std.meta.activeTag(value);
 
-    inline for (info.field_names, info.field_types) |name, Field| {
-        if (tag == @field(info.tag_type.?, name)) {
-            if (Field == void) return serializer.serializeString(name);
+    inline for (comptime kind.unionFields(T)) |field| {
+        if (tag == @field(info.tag_type.?, field.name)) {
+            if (field.type == void) return serializer.serializeString(field.name);
 
             try serializer.writer.writeByte('{');
             serializer.depth += 1;
-            try writeFieldPrefix(name, true, serializer);
-            try serializeValue(Field, @field(value, name), serializer);
+            try writeFieldPrefix(field.name, true, serializer);
+            try serializeValue(field.type, @field(value, field.name), serializer);
             serializer.depth -= 1;
             try serializer.newline();
             return serializer.writer.writeByte('}');

@@ -2,6 +2,66 @@
 
 const std = @import("std");
 
+const split_fields = !@hasField(std.builtin.Type.Struct, "fields");
+
+pub const StructField = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque,
+
+    pub fn defaultValue(comptime field: StructField) ?field.type {
+        const value: *const field.type = @ptrCast(@alignCast(field.default_value_ptr orelse return null));
+        return value.*;
+    }
+};
+
+pub const EnumField = struct {
+    name: [:0]const u8,
+    value: comptime_int,
+};
+
+pub const UnionField = struct {
+    name: [:0]const u8,
+    type: type,
+};
+
+pub fn structFields(comptime T: type) []const if (split_fields) StructField else std.builtin.Type.StructField {
+    const info = @typeInfo(T).@"struct";
+    comptime if (!split_fields) return info.fields;
+
+    comptime var fields: []const StructField = &.{};
+    inline for (info.field_names, info.field_types, info.field_attrs) |name, Field, attrs| {
+        fields = fields ++ &[_]StructField{.{
+            .name = name,
+            .type = Field,
+            .default_value_ptr = attrs.default_value_ptr,
+        }};
+    }
+    return fields;
+}
+
+pub fn enumFields(comptime T: type) []const if (split_fields) EnumField else std.builtin.Type.EnumField {
+    const info = @typeInfo(T).@"enum";
+    comptime if (!split_fields) return info.fields;
+
+    comptime var fields: []const EnumField = &.{};
+    inline for (info.field_names, info.field_values) |name, value| {
+        fields = fields ++ &[_]EnumField{.{ .name = name, .value = value }};
+    }
+    return fields;
+}
+
+pub fn unionFields(comptime T: type) []const if (split_fields) UnionField else std.builtin.Type.UnionField {
+    const info = @typeInfo(T).@"union";
+    comptime if (!split_fields) return info.fields;
+
+    comptime var fields: []const UnionField = &.{};
+    inline for (info.field_names, info.field_types) |name, Field| {
+        fields = fields ++ &[_]UnionField{.{ .name = name, .type = Field }};
+    }
+    return fields;
+}
+
 /// Structural kind of a Zig type in the JSON data model.
 pub const Kind = enum {
     bool,
@@ -216,10 +276,8 @@ pub fn isDynamic(comptime T: type) bool {
 }
 
 fn structIsDynamic(comptime T: type) bool {
-    const info = @typeInfo(T).@"struct";
-
-    inline for (info.field_types) |field_type| {
-        if (isDynamic(field_type))
+    inline for (comptime structFields(T)) |field| {
+        if (isDynamic(field.type))
             return true;
     }
 
@@ -227,10 +285,8 @@ fn structIsDynamic(comptime T: type) bool {
 }
 
 fn unionIsDynamic(comptime T: type) bool {
-    const info = @typeInfo(T).@"union";
-
-    inline for (info.field_types) |field_type| {
-        if (isDynamic(field_type))
+    inline for (comptime unionFields(T)) |field| {
+        if (isDynamic(field.type))
             return true;
     }
 

@@ -144,6 +144,20 @@ pub const Cursor = struct {
         self.pos += 1;
         const start = self.pos;
 
+        while (self.pos + 4 <= self.input.len) {
+            const a = self.input[self.pos];
+            const b = self.input[self.pos + 1];
+            const c = self.input[self.pos + 2];
+            const d = self.input[self.pos + 3];
+            if ((a >= 0x20 and a != '"' and a != '\\') and
+                (b >= 0x20 and b != '"' and b != '\\') and
+                (c >= 0x20 and c != '"' and c != '\\') and
+                (d >= 0x20 and d != '"' and d != '\\'))
+            {
+                self.pos += 4;
+            } else break;
+        }
+
         while (self.pos < self.input.len) {
             switch (self.input[self.pos]) {
                 '"' => {

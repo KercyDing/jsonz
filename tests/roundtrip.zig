@@ -1,7 +1,7 @@
 const std = @import("std");
 const jsonz = @import("jsonz");
 
-const test_json = @import("test_data").content;
+const content = @embedFile("data/twitter.json");
 
 pub const User = struct {
     id: u64,
@@ -38,7 +38,7 @@ test "document round trip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const response = try jsonz.fromSlice(Document, arena.allocator(), test_json, .{
+    const response = try jsonz.fromSlice(Document, arena.allocator(), content, .{
         .ignore_unknown_fields = true,
     });
 

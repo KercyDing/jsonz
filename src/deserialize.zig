@@ -230,15 +230,17 @@ fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
             };
             try deserializer.cursor.expectColon();
 
-            if (findField(T, raw_key)) |field_index| {
-                inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
-                    if (field_index == index) {
-                        if (seen[index]) return error.UnexpectedToken;
-                        @field(result, name) = try deserializeValue(Field, deserializer);
-                        seen[index] = true;
-                    }
+            const selector = fieldSelector(raw_key);
+            var found = false;
+            inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
+                if (selector == (comptime fieldSelector(name)) and std.mem.eql(u8, raw_key, name)) {
+                    if (seen[index]) return error.UnexpectedToken;
+                    @field(result, name) = try deserializeValue(Field, deserializer);
+                    seen[index] = true;
+                    found = true;
                 }
-            } else {
+            }
+            if (!found) {
                 if (!deserializer.options.ignore_unknown_fields) return error.UnknownField;
                 try deserializer.cursor.skipValue();
             }
@@ -260,15 +262,6 @@ fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
         }
     }
     return result;
-}
-
-fn findField(comptime T: type, key: []const u8) ?usize {
-    const names = @typeInfo(T).@"struct".field_names;
-    const selector = fieldSelector(key);
-    inline for (names, 0..) |name, index| {
-        if (selector == (comptime fieldSelector(name)) and std.mem.eql(u8, key, name)) return index;
-    }
-    return null;
 }
 
 fn fieldSelector(key: []const u8) u64 {

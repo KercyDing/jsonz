@@ -1,0 +1,387 @@
+const std = @import("std");
+const kind = @import("kind.zig");
+const cursor_mod = @import("cursor.zig");
+
+const Allocator = std.mem.Allocator;
+const Cursor = cursor_mod.Cursor;
+const Token = cursor_mod.Token;
+
+pub const Error = cursor_mod.Error || error{
+    OutOfMemory,
+    WrongType,
+    UnknownField,
+    MissingField,
+    InvalidUnicode,
+    TrailingData,
+};
+
+pub const Options = struct {
+    ignore_unknown_fields: bool = false,
+    max_depth: u32 = 256,
+};
+
+pub const Deserializer = struct {
+    cursor: Cursor,
+    allocator: Allocator,
+    options: Options,
+    borrow_strings: bool,
+
+    pub fn init(allocator: Allocator, input: []const u8, options: Options) Deserializer {
+        return .{
+            .cursor = .{ .input = input, .max_depth = options.max_depth },
+            .allocator = allocator,
+            .options = options,
+            .borrow_strings = false,
+        };
+    }
+
+    pub fn initBorrowed(allocator: Allocator, input: []const u8, options: Options) Deserializer {
+        var deserializer = init(allocator, input, options);
+        deserializer.borrow_strings = true;
+        return deserializer;
+    }
+
+    pub fn deserialize(self: *Deserializer, comptime T: type) Error!T {
+        return deserializeValue(T, self);
+    }
+
+    pub fn deserializeBool(self: *Deserializer) Error!bool {
+        return switch (try self.cursor.next()) {
+            .true_lit => true,
+            .false_lit => false,
+            else => error.WrongType,
+        };
+    }
+
+    pub fn deserializeInt(self: *Deserializer, comptime T: type) Error!T {
+        return switch (try self.cursor.next()) {
+            .number => |raw| std.fmt.parseInt(T, raw, 10) catch error.InvalidNumber,
+            else => error.WrongType,
+        };
+    }
+
+    pub fn deserializeFloat(self: *Deserializer, comptime T: type) Error!T {
+        return switch (try self.cursor.next()) {
+            .number => |raw| std.fmt.parseFloat(T, raw) catch error.InvalidNumber,
+            else => error.WrongType,
+        };
+    }
+
+    pub fn deserializeString(self: *Deserializer) Error![]const u8 {
+        const raw = switch (try self.cursor.next()) {
+            .string => |value| value,
+            else => return error.WrongType,
+        };
+
+        if (!Cursor.hasEscapes(raw)) {
+            if (self.borrow_strings) return raw;
+            return self.allocator.dupe(u8, raw) catch error.OutOfMemory;
+        }
+        return unescapeString(self.allocator, raw);
+    }
+};
+
+pub fn fromSlice(comptime T: type, allocator: Allocator, input: []const u8) Error!T {
+    return fromSliceWith(T, allocator, input, .{});
+}
+
+pub fn fromSliceWith(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
+    var deserializer = Deserializer.init(allocator, input, options);
+    const value = try deserializer.deserialize(T);
+    deserializer.cursor.finish() catch return error.TrailingData;
+    return value;
+}
+
+pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const u8) Error!T {
+    var deserializer = Deserializer.initBorrowed(allocator, input, .{});
+    const value = try deserializer.deserialize(T);
+    deserializer.cursor.finish() catch return error.TrailingData;
+    return value;
+}
+
+fn deserializeValue(comptime T: type, deserializer: *Deserializer) Error!T {
+    if (comptime kind.hasCustomDeserialize(T)) {
+        return T.jsonzDeserialize(T, deserializer.allocator, deserializer);
+    }
+
+    return switch (comptime kind.typeKind(T)) {
+        .bool => deserializer.deserializeBool(),
+        .int => deserializer.deserializeInt(T),
+        .float => deserializer.deserializeFloat(T),
+        .string => deserializeStringType(T, deserializer),
+        .void => deserializeVoid(deserializer),
+        .optional => deserializeOptional(T, deserializer),
+        .array => deserializeArray(T, deserializer),
+        .slice => deserializeSlice(T, deserializer),
+        .tuple => deserializeTuple(T, deserializer),
+        .@"struct" => deserializeStruct(T, deserializer),
+        .@"enum" => deserializeEnum(T, deserializer),
+        .@"union" => deserializeUnion(T, deserializer),
+    };
+}
+
+fn deserializeVoid(deserializer: *Deserializer) Error!void {
+    if (try deserializer.cursor.next() != .null_lit) return error.WrongType;
+}
+
+fn deserializeOptional(comptime T: type, deserializer: *Deserializer) Error!T {
+    if (try deserializer.cursor.peek() == .null_lit) {
+        _ = try deserializer.cursor.next();
+        return null;
+    }
+    return try deserializeValue(kind.Child(T), deserializer);
+}
+
+fn deserializeStringType(comptime T: type, deserializer: *Deserializer) Error!T {
+    const value = try deserializer.deserializeString();
+    const pointer = @typeInfo(T).pointer;
+
+    if (pointer.size == .slice and pointer.sentinel() == null) return value;
+    if (deserializer.borrow_strings) return error.WrongType;
+
+    const sentinel = pointer.sentinel() orelse return error.WrongType;
+    const terminated = deserializer.allocator.allocSentinel(u8, value.len, sentinel) catch return error.OutOfMemory;
+    @memcpy(terminated, value);
+    deserializer.allocator.free(value);
+    return if (pointer.size == .many) terminated.ptr else terminated;
+}
+
+fn deserializeArray(comptime T: type, deserializer: *Deserializer) Error!T {
+    const array = @typeInfo(T).array;
+    if (try deserializer.cursor.next() != .array_begin) return error.WrongType;
+
+    var result: T = undefined;
+    if (array.len == 0) {
+        if (!try deserializer.cursor.isContainerEmpty(']')) return error.WrongType;
+        _ = try deserializer.cursor.next();
+        return result;
+    }
+
+    for (0..array.len) |index| {
+        result[index] = try deserializeValue(array.child, deserializer);
+        const step = try deserializer.cursor.finishContainer(']');
+        if (index + 1 == array.len) {
+            if (step != .end) return error.WrongType;
+        } else if (step != .more) return error.WrongType;
+    }
+    return result;
+}
+
+fn deserializeSlice(comptime T: type, deserializer: *Deserializer) Error!T {
+    const Child = kind.Child(T);
+    if (try deserializer.cursor.next() != .array_begin) return error.WrongType;
+
+    var result: std.ArrayList(Child) = .empty;
+    errdefer result.deinit(deserializer.allocator);
+    if (comptime kind.typeKind(Child) == .string) {
+        const estimate = @min(deserializer.cursor.remainingBytes() / 10, 4096);
+        if (estimate != 0) {
+            result.ensureTotalCapacity(deserializer.allocator, estimate) catch return error.OutOfMemory;
+        }
+    } else {
+        result.ensureTotalCapacity(deserializer.allocator, 8) catch return error.OutOfMemory;
+    }
+    if (try deserializer.cursor.isContainerEmpty(']')) {
+        _ = try deserializer.cursor.next();
+        return result.toOwnedSlice(deserializer.allocator) catch error.OutOfMemory;
+    }
+
+    while (true) {
+        const element = try deserializeValue(Child, deserializer);
+        result.append(deserializer.allocator, element) catch return error.OutOfMemory;
+        if (try deserializer.cursor.finishContainer(']') == .end) break;
+    }
+    return result.toOwnedSlice(deserializer.allocator) catch error.OutOfMemory;
+}
+
+fn deserializeTuple(comptime T: type, deserializer: *Deserializer) Error!T {
+    const info = @typeInfo(T).@"struct";
+    if (try deserializer.cursor.next() != .array_begin) return error.WrongType;
+
+    var result: T = undefined;
+    if (info.field_names.len == 0) {
+        if (!try deserializer.cursor.isContainerEmpty(']')) return error.WrongType;
+        _ = try deserializer.cursor.next();
+        return result;
+    }
+
+    inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
+        @field(result, name) = try deserializeValue(Field, deserializer);
+        const step = try deserializer.cursor.finishContainer(']');
+        if (index + 1 == info.field_names.len) {
+            if (step != .end) return error.WrongType;
+        } else if (step != .more) return error.WrongType;
+    }
+    return result;
+}
+
+fn deserializeStruct(comptime T: type, deserializer: *Deserializer) Error!T {
+    const info = @typeInfo(T).@"struct";
+    if (try deserializer.cursor.next() != .object_begin) return error.WrongType;
+
+    var result: T = undefined;
+    var seen: [info.field_names.len]bool = @splat(false);
+
+    if (!try deserializer.cursor.isContainerEmpty('}')) {
+        while (true) {
+            const raw_key = switch (try deserializer.cursor.next()) {
+                .string => |key| key,
+                else => return error.WrongType,
+            };
+            try deserializer.cursor.expectColon();
+
+            if (findField(T, raw_key)) |field_index| {
+                inline for (info.field_names, info.field_types, 0..) |name, Field, index| {
+                    if (field_index == index) {
+                        if (seen[index]) return error.UnexpectedToken;
+                        @field(result, name) = try deserializeValue(Field, deserializer);
+                        seen[index] = true;
+                    }
+                }
+            } else {
+                if (!deserializer.options.ignore_unknown_fields) return error.UnknownField;
+                try deserializer.cursor.skipValue();
+            }
+            if (try deserializer.cursor.finishContainer('}') == .end) break;
+        }
+    } else {
+        _ = try deserializer.cursor.next();
+    }
+
+    inline for (info.field_names, info.field_types, info.field_attrs, 0..) |name, Field, attrs, index| {
+        if (!seen[index]) {
+            if (comptime attrs.defaultValue(Field)) |default| {
+                @field(result, name) = default;
+            } else if (@typeInfo(Field) == .optional) {
+                @field(result, name) = null;
+            } else {
+                return error.MissingField;
+            }
+        }
+    }
+    return result;
+}
+
+fn findField(comptime T: type, key: []const u8) ?usize {
+    const names = @typeInfo(T).@"struct".field_names;
+    const selector = fieldSelector(key);
+    inline for (names, 0..) |name, index| {
+        if (selector == (comptime fieldSelector(name)) and std.mem.eql(u8, key, name)) return index;
+    }
+    return null;
+}
+
+fn fieldSelector(key: []const u8) u64 {
+    if (key.len == 0) return 0;
+    return @as(u64, key.len) |
+        (@as(u64, key[0]) << 32) |
+        (@as(u64, key[key.len - 1]) << 40);
+}
+
+fn deserializeEnum(comptime T: type, deserializer: *Deserializer) Error!T {
+    const raw = switch (try deserializer.cursor.next()) {
+        .string => |value| value,
+        else => return error.WrongType,
+    };
+    const info = @typeInfo(T).@"enum";
+    inline for (info.field_names, info.field_values) |name, value| {
+        if (std.mem.eql(u8, raw, name)) return @fromBackingInt(@intCast(value));
+    }
+    return error.UnexpectedToken;
+}
+
+fn deserializeUnion(comptime T: type, deserializer: *Deserializer) Error!T {
+    const info = @typeInfo(T).@"union";
+    const first = try deserializer.cursor.next();
+
+    if (first == .string) {
+        const name = first.string;
+        inline for (info.field_names, info.field_types) |field_name, Field| {
+            if (Field == void and std.mem.eql(u8, name, field_name)) return @unionInit(T, field_name, {});
+        }
+        return error.UnexpectedToken;
+    }
+    if (first != .object_begin) return error.WrongType;
+
+    const name = switch (try deserializer.cursor.next()) {
+        .string => |value| value,
+        else => return error.WrongType,
+    };
+    try deserializer.cursor.expectColon();
+
+    inline for (info.field_names, info.field_types) |field_name, Field| {
+        if (std.mem.eql(u8, name, field_name)) {
+            const payload = try deserializeValue(Field, deserializer);
+            if (try deserializer.cursor.finishContainer('}') != .end) return error.WrongType;
+            return @unionInit(T, field_name, payload);
+        }
+    }
+    return error.UnexpectedToken;
+}
+
+fn unescapeString(allocator: Allocator, raw: []const u8) Error![]u8 {
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < raw.len) {
+        if (raw[index] != '\\') {
+            result.append(allocator, raw[index]) catch return error.OutOfMemory;
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+        if (index == raw.len) return error.UnexpectedEof;
+        switch (raw[index]) {
+            '"' => try appendByte(&result, allocator, '"'),
+            '\\' => try appendByte(&result, allocator, '\\'),
+            '/' => try appendByte(&result, allocator, '/'),
+            'b' => try appendByte(&result, allocator, 0x08),
+            'f' => try appendByte(&result, allocator, 0x0c),
+            'n' => try appendByte(&result, allocator, '\n'),
+            'r' => try appendByte(&result, allocator, '\r'),
+            't' => try appendByte(&result, allocator, '\t'),
+            'u' => {
+                if (index + 5 > raw.len) return error.UnexpectedEof;
+                const codepoint = std.fmt.parseInt(u21, raw[index + 1 .. index + 5], 16) catch return error.InvalidUnicode;
+                if (codepoint >= 0xd800 and codepoint <= 0xdfff) return error.InvalidUnicode;
+                var buffer: [4]u8 = undefined;
+                const length = std.unicode.utf8Encode(codepoint, &buffer) catch return error.InvalidUnicode;
+                result.appendSlice(allocator, buffer[0..length]) catch return error.OutOfMemory;
+                index += 4;
+            },
+            else => return error.InvalidEscape,
+        }
+        index += 1;
+    }
+    return result.toOwnedSlice(allocator) catch error.OutOfMemory;
+}
+
+fn appendByte(result: *std.ArrayList(u8), allocator: Allocator, byte: u8) Error!void {
+    result.append(allocator, byte) catch return error.OutOfMemory;
+}
+
+const testing = std.testing;
+
+test "nested values" {
+    const User = struct {
+        id: u32,
+        name: []const u8,
+        flags: []const bool,
+    };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const user = try fromSlice(User, arena.allocator(), "{\"id\":7,\"name\":\"jsonz\",\"flags\":[true,false]}");
+    try testing.expectEqual(@as(u32, 7), user.id);
+    try testing.expectEqualStrings("jsonz", user.name);
+    try testing.expectEqualSlices(bool, &.{ true, false }, user.flags);
+}
+
+test "borrowed strings" {
+    const input = "\"jsonz\"";
+    const value = try fromSliceBorrowed([]const u8, testing.allocator, input);
+    try testing.expect(value.ptr == input.ptr + 1);
+}

@@ -13,10 +13,11 @@ test():
     zig build test
 
 [help] Run benchmarks
+[desc] Use `only bench typed` to enable typed mode.
 [pass] Benchmarks complete.
 [fail] Benchmarks failed.
-bench():
-    zig build bench
+bench(mode = "dynamic"):
+    zig build bench -Dmode={{mode}}
 
 [help] Build in release mode
 [desc] Run `only release false` to turn off the strip.

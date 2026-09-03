@@ -50,14 +50,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_roundtrip_tests.step);
 
     const bench_step = b.step("bench", "Run benchmarks");
+    const bench_mode = b.option([]const u8, "mode", "Benchmark mode: dynamic or typed") orelse "dynamic";
+    const bench_file = b.option([]const u8, "file", "Run one benchmark dataset") orelse null;
+    if (!std.mem.eql(u8, bench_mode, "dynamic") and !std.mem.eql(u8, bench_mode, "typed")) {
+        @panic("-Dmode must be dynamic or typed");
+    }
     const bench_jsonz_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .strip = false,
-    });
-    const bench_test_data_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_data.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .strip = false,
@@ -69,14 +68,20 @@ pub fn build(b: *std.Build) void {
         .strip = false,
         .imports = &.{
             .{ .name = "jsonz", .module = bench_jsonz_mod },
-            .{ .name = "test_data", .module = bench_test_data_mod },
         },
     });
     const bench_exe = b.addExecutable(.{
         .name = "jsonz-bench",
         .root_module = bench_mod,
     });
+    bench_exe.root_module.link_libc = true;
+    bench_exe.use_llvm = true;
     const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.addArg(bench_mode);
+    if (bench_file) |file| {
+        run_bench.addArg("--file");
+        run_bench.addArg(file);
+    }
     bench_step.dependOn(&run_bench.step);
 }
 

@@ -146,8 +146,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     else if (std.mem.eql(u8, mode_arg, "typed"))
         Mode.typed
     else if (std.mem.eql(u8, mode_arg, "--help")) {
-            printHelp();
-            return;
+        printHelp();
+        return;
     } else return error.InvalidArguments;
 
     var selected_file: ?[]const u8 = null;

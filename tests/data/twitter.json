@@ -1,0 +1,151 @@
+{
+  "statuses": [
+    {
+      "created_at": "Wed Sep 02 08:10:00 +0000 2026",
+      "id": 9007199254740901,
+      "text": "Testing jsonz with a realistic API response.",
+      "source": "<a href=\"https://example.com\">Web Client</a>",
+      "truncated": false,
+      "user": {
+        "id": 10001,
+        "name": "Alice Zhang",
+        "screen_name": "alice_z",
+        "location": "Shanghai",
+        "description": "Systems programmer · Zig enthusiast",
+        "followers_count": 18420,
+        "friends_count": 611,
+        "verified": true,
+        "profile": {"theme": "dark", "show_media": true}
+      },
+      "entities": {
+        "hashtags": [{"text": "zig", "indices": [8, 12]}],
+        "urls": [],
+        "user_mentions": []
+      },
+      "retweet_count": 128,
+      "favorite_count": 491,
+      "lang": "en"
+    },
+    {
+      "created_at": "Wed Sep 02 08:11:30 +0000 2026",
+      "id": 9007199254740902,
+      "text": "Escaped text: line one\nline two, quote: \"fast JSON\".",
+      "source": "Mobile",
+      "truncated": false,
+      "user": {
+        "id": 10002,
+        "name": "Bob Müller",
+        "screen_name": "bob_codes",
+        "location": "Berlin",
+        "description": "Performance engineering",
+        "followers_count": 9321,
+        "friends_count": 402,
+        "verified": false
+      },
+      "entities": {"hashtags": [], "urls": [{"url": "https://t.co/example", "expanded_url": "https://example.com/bench"}]},
+      "retweet_count": 44,
+      "favorite_count": 203,
+      "lang": "en",
+      "possibly_sensitive": true
+    },
+    {
+      "created_at": "Wed Sep 02 08:14:02 +0000 2026",
+      "id": 9007199254740903,
+      "text": "日本語のJSONもテストします",
+      "source": "Web Client",
+      "truncated": false,
+      "user": {
+        "id": 10003,
+        "name": "佐藤",
+        "screen_name": "sato_dev",
+        "location": "Tokyo",
+        "description": "低レイヤーとデータ処理",
+        "followers_count": 22710,
+        "friends_count": 731,
+        "verified": true
+      },
+      "entities": {"hashtags": [{"text": "JSON", "indices": [4, 8]}], "urls": []},
+      "retweet_count": 301,
+      "favorite_count": 1204,
+      "lang": "ja"
+    },
+    {
+      "created_at": "Wed Sep 02 08:18:45 +0000 2026",
+      "id": 9007199254740904,
+      "text": "Numbers matter: 184467, -42, and 3.1415926535.",
+      "source": "API",
+      "truncated": false,
+      "user": {
+        "id": 10004,
+        "name": "Carol Smith",
+        "screen_name": "carol_data",
+        "location": "Toronto",
+        "description": "Data infrastructure",
+        "followers_count": 5432,
+        "friends_count": 287,
+        "verified": false
+      },
+      "entities": {"hashtags": [], "urls": [], "symbols": [{"text": "JSON"}]},
+      "retweet_count": 17,
+      "favorite_count": 86,
+      "lang": "en"
+    },
+    {
+      "created_at": "Wed Sep 02 08:21:07 +0000 2026",
+      "id": 9007199254740905,
+      "text": "Unknown nested fields should be skipped efficiently.",
+      "source": "Web Client",
+      "truncated": false,
+      "user": {
+        "id": 10005,
+        "name": "Diego García",
+        "screen_name": "diego_systems",
+        "location": "Madrid",
+        "description": "Compilers and parsers",
+        "followers_count": 15100,
+        "friends_count": 519,
+        "verified": true
+      },
+      "entities": {
+        "hashtags": [{"text": "parsing", "indices": [7, 15]}, {"text": "simd", "indices": [16, 21]}],
+        "urls": [],
+        "media": [{"id": 501, "sizes": {"small": {"w": 640, "h": 360}, "large": {"w": 1920, "h": 1080}}}]
+      },
+      "retweet_count": 92,
+      "favorite_count": 377,
+      "lang": "en"
+    },
+    {
+      "created_at": "Wed Sep 02 08:25:59 +0000 2026",
+      "id": 9007199254740906,
+      "text": "Final record with emoji 🚀 and UTF-8 names.",
+      "source": "Mobile",
+      "truncated": false,
+      "user": {
+        "id": 10006,
+        "name": "Élodie Martin",
+        "screen_name": "elodie_perf",
+        "location": "Paris",
+        "description": "Benchmarking all the things",
+        "followers_count": 8102,
+        "friends_count": 344,
+        "verified": false
+      },
+      "entities": {"hashtags": [{"text": "performance", "indices": [12, 24]}], "urls": []},
+      "retweet_count": 63,
+      "favorite_count": 245,
+      "lang": "en"
+    }
+  ],
+  "search_metadata": {
+    "completed_in": 0.031,
+    "max_id": 9007199254740906,
+    "max_id_str": "9007199254740906",
+    "next_results": "?max_id=9007199254740900&q=zig%20json&count=6",
+    "query": "zig json",
+    "refresh_url": "?since_id=9007199254740906&q=zig%20json",
+    "count": 6,
+    "since_id": 0,
+    "since_id_str": "0"
+  }
+}

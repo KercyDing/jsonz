@@ -99,22 +99,24 @@ pub const Deserializer = struct {
     }
 };
 
-pub fn fromSlice(comptime T: type, allocator: Allocator, input: []const u8) Error!T {
-    return fromSliceWith(T, allocator, input, .{});
-}
-
-pub fn fromSliceWith(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
+pub fn fromSlice(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
     var deserializer = Deserializer.init(allocator, input, options);
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
     return value;
 }
 
-pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const u8) Error!T {
-    var deserializer = Deserializer.initBorrowed(allocator, input, .{});
+pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
+    var deserializer = Deserializer.initBorrowed(allocator, input, options);
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
     return value;
+}
+
+/// Parses using caller-provided storage. The returned value borrows `buffer`.
+pub fn fromSliceInto(comptime T: type, buffer: []u8, input: []const u8, options: Options) Error!T {
+    var fixed_buffer = std.heap.FixedBufferAllocator.init(buffer);
+    return fromSlice(T, fixed_buffer.allocator(), input, options);
 }
 
 /// Parses into a contiguous pool released by `Parsed.deinit`.
@@ -125,7 +127,7 @@ pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, options:
     var fallback = std.heap.ArenaAllocator.init(allocator);
     errdefer fallback.deinit();
     var pool = pool_mod.Pool.init(buffer, fallback.allocator());
-    const value = try fromSliceWith(T, pool.allocator(), input, options);
+    const value = try fromSlice(T, pool.allocator(), input, options);
 
     return .{
         .value = value,
@@ -404,7 +406,7 @@ test "nested values" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const user = try fromSlice(User, arena.allocator(), "{\"id\":7,\"name\":\"jsonz\",\"flags\":[true,false]}");
+    const user = try fromSlice(User, arena.allocator(), "{\"id\":7,\"name\":\"jsonz\",\"flags\":[true,false]}", .{});
     try testing.expectEqual(@as(u32, 7), user.id);
     try testing.expectEqualStrings("jsonz", user.name);
     try testing.expectEqualSlices(bool, &.{ true, false }, user.flags);
@@ -412,18 +414,37 @@ test "nested values" {
 
 test "borrowed strings" {
     const input = "\"jsonz\"";
-    const value = try fromSliceBorrowed([]const u8, testing.allocator, input);
+    const value = try fromSliceBorrowed([]const u8, testing.allocator, input, .{});
     try testing.expect(value.ptr == input.ptr + 1);
 }
 
 test "integer bounds" {
-    try testing.expectEqual(std.math.maxInt(u64), try fromSlice(u64, testing.allocator, "18446744073709551615"));
-    try testing.expectEqual(std.math.minInt(i64), try fromSlice(i64, testing.allocator, "-9223372036854775808"));
-    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "18446744073709551616"));
-    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "9223372036854775808"));
-    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "-9223372036854775809"));
-    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "-1"));
-    try testing.expectError(error.InvalidNumber, fromSlice(u32, testing.allocator, "1.0"));
+    try testing.expectEqual(std.math.maxInt(u64), try fromSlice(u64, testing.allocator, "18446744073709551615", .{}));
+    try testing.expectEqual(std.math.minInt(i64), try fromSlice(i64, testing.allocator, "-9223372036854775808", .{}));
+    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "18446744073709551616", .{}));
+    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "9223372036854775808", .{}));
+    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "-9223372036854775809", .{}));
+    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "-1", .{}));
+    try testing.expectError(error.InvalidNumber, fromSlice(u32, testing.allocator, "1.0", .{}));
+}
+
+test "caller buffer" {
+    const User = struct {
+        name: []const u8,
+        tags: []const []const u8,
+    };
+
+    var buffer: [512]u8 = undefined;
+    const user = try fromSliceInto(User, &buffer, "{\"name\":\"jsonz\",\"tags\":[\"zig\",\"json\"]}", .{});
+
+    try testing.expectEqualStrings("jsonz", user.name);
+    try testing.expectEqualStrings("zig", user.tags[0]);
+    try testing.expectEqualStrings("json", user.tags[1]);
+}
+
+test "caller buffer capacity" {
+    var buffer: [1]u8 = undefined;
+    try testing.expectError(error.OutOfMemory, fromSliceInto([]const u8, &buffer, "\"jsonz\"", .{}));
 }
 
 test "parsed value" {

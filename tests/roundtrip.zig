@@ -38,7 +38,7 @@ test "document round trip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    const response = try jsonz.fromSliceWith(Document, arena.allocator(), test_json, .{
+    const response = try jsonz.fromSlice(Document, arena.allocator(), test_json, .{
         .ignore_unknown_fields = true,
     });
 
@@ -55,7 +55,7 @@ test "document round trip" {
 
     var roundtrip_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer roundtrip_arena.deinit();
-    const roundtrip = try jsonz.fromSlice(Document, roundtrip_arena.allocator(), encoded);
+    const roundtrip = try jsonz.fromSlice(Document, roundtrip_arena.allocator(), encoded, .{});
 
     try std.testing.expectEqual(response.statuses.len, roundtrip.statuses.len);
     try std.testing.expectEqual(response.statuses[5].id, roundtrip.statuses[5].id);

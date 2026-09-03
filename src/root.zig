@@ -13,8 +13,8 @@ pub const DeserializeError = deserialize_mod.Error;
 pub const toSlice = serialize_mod.toSlice;
 pub const toWriter = serialize_mod.toWriter;
 pub const fromSlice = deserialize_mod.fromSlice;
-pub const fromSliceWith = deserialize_mod.fromSliceWith;
 pub const fromSliceBorrowed = deserialize_mod.fromSliceBorrowed;
+pub const fromSliceInto = deserialize_mod.fromSliceInto;
 pub const parse = deserialize_mod.parse;
 
 test {

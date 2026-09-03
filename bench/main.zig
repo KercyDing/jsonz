@@ -4,6 +4,7 @@ const jsonz = @import("jsonz");
 const test_data = @import("test_data");
 const iterations = 2_000;
 const string_count = 4_096;
+const parse_buffer_size = 256 * 1024;
 
 const User = struct {
     id: u64,
@@ -41,7 +42,7 @@ pub fn main() !void {
 
     var source_arena = std.heap.ArenaAllocator.init(allocator);
     defer source_arena.deinit();
-    const source = try jsonz.fromSliceWith(Document, source_arena.allocator(), test_data.content, .{
+    const source = try jsonz.fromSlice(Document, source_arena.allocator(), test_data.content, .{
         .ignore_unknown_fields = true,
     });
     const serialized_sample = try jsonz.toSlice(allocator, source, .{});
@@ -50,12 +51,14 @@ pub fn main() !void {
     try warmup(allocator, source);
 
     const jsonz_parse_ns = try benchParse(Document, allocator, test_data.content, false, true);
+    const jsonz_buffer_ns = try benchParseInto(Document, test_data.content, true);
     const std_parse_ns = try benchParse(Document, allocator, test_data.content, true, true);
     const jsonz_serialize_ns = try benchJsonzSerialize(allocator, source);
     const std_serialize_ns = try benchStdSerialize(allocator, source);
 
     std.debug.print("{s}: {d} bytes, {d} iterations\n", .{ test_data.file_name, test_data.content.len, iterations });
     printResult("jsonz parse", jsonz_parse_ns, test_data.content.len);
+    printResult("jsonz buffer", jsonz_buffer_ns, test_data.content.len);
     printResult("std.json parse", std_parse_ns, test_data.content.len);
     printResult("jsonz serialize", jsonz_serialize_ns, serialized_sample.len);
     printResult("std.json serialize", std_serialize_ns, serialized_sample.len);
@@ -63,20 +66,27 @@ pub fn main() !void {
     const string_array = try makeStringArray(allocator);
     defer allocator.free(string_array);
     const jsonz_string_array_ns = try benchParse([]const []const u8, allocator, string_array, false, false);
+    const jsonz_buffer_array_ns = try benchParseInto([]const []const u8, string_array, false);
     const std_string_array_ns = try benchParse([]const []const u8, allocator, string_array, true, false);
 
     std.debug.print("\nlarge string array: {d} bytes, {d} elements\n", .{ string_array.len, string_count });
     printResult("jsonz parse", jsonz_string_array_ns, string_array.len);
+    printResult("jsonz buffer", jsonz_buffer_array_ns, string_array.len);
     printResult("std.json parse", std_string_array_ns, string_array.len);
 }
 
 fn warmup(allocator: std.mem.Allocator, source: Document) !void {
     for (0..20) |_| {
         var jsonz_arena = std.heap.ArenaAllocator.init(allocator);
-        _ = try jsonz.fromSliceWith(Document, jsonz_arena.allocator(), test_data.content, .{
+        _ = try jsonz.fromSlice(Document, jsonz_arena.allocator(), test_data.content, .{
             .ignore_unknown_fields = true,
         });
         jsonz_arena.deinit();
+
+        var buffer: [parse_buffer_size]u8 = undefined;
+        _ = try jsonz.fromSliceInto(Document, &buffer, test_data.content, .{
+            .ignore_unknown_fields = true,
+        });
 
         var std_arena = std.heap.ArenaAllocator.init(allocator);
         _ = try std.json.parseFromSliceLeaky(Document, std_arena.allocator(), test_data.content, .{
@@ -104,9 +114,21 @@ fn benchParse(
         const value = if (use_std)
             try std.json.parseFromSliceLeaky(T, arena.allocator(), input, .{ .ignore_unknown_fields = ignore_unknown_fields })
         else
-            try jsonz.fromSliceWith(T, arena.allocator(), input, .{ .ignore_unknown_fields = ignore_unknown_fields });
+            try jsonz.fromSlice(T, arena.allocator(), input, .{ .ignore_unknown_fields = ignore_unknown_fields });
         std.mem.doNotOptimizeAway(value);
         arena.deinit();
+    }
+    return nowNs() - start;
+}
+
+fn benchParseInto(comptime T: type, input: []const u8, comptime ignore_unknown_fields: bool) !u64 {
+    var buffer: [parse_buffer_size]u8 = undefined;
+    const start = nowNs();
+    for (0..iterations) |_| {
+        const value = try jsonz.fromSliceInto(T, &buffer, input, .{
+            .ignore_unknown_fields = ignore_unknown_fields,
+        });
+        std.mem.doNotOptimizeAway(value);
     }
     return nowNs() - start;
 }

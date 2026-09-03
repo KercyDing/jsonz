@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const string_char_table = blk: {
+    var table: [256]u8 = undefined;
+    for (&table, 0..) |*entry, byte| {
+        entry.* = if (byte < 0x20 or byte == '"' or byte == '\\') 1 else 0;
+    }
+    break :blk table;
+};
+
 pub const Token = union(enum) {
     object_begin,
     object_end,
@@ -149,10 +157,8 @@ pub const Cursor = struct {
             const b = self.input[self.pos + 1];
             const c = self.input[self.pos + 2];
             const d = self.input[self.pos + 3];
-            if ((a >= 0x20 and a != '"' and a != '\\') and
-                (b >= 0x20 and b != '"' and b != '\\') and
-                (c >= 0x20 and c != '"' and c != '\\') and
-                (d >= 0x20 and d != '"' and d != '\\'))
+            if ((string_char_table[a] | string_char_table[b] |
+                string_char_table[c] | string_char_table[d]) == 0)
             {
                 self.pos += 4;
             } else break;

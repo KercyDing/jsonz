@@ -315,6 +315,7 @@ fn deserializeUnion(comptime T: type, deserializer: *Deserializer) Error!T {
 fn unescapeString(allocator: Allocator, raw: []const u8) Error![]u8 {
     var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
+    result.ensureTotalCapacity(allocator, raw.len) catch return error.OutOfMemory;
 
     var index: usize = 0;
     while (index < raw.len) {

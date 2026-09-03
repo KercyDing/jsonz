@@ -121,7 +121,8 @@ pub fn fromSliceInto(comptime T: type, buffer: []u8, input: []const u8, options:
 
 /// Parses into a contiguous pool released by `Parsed.deinit`.
 pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!Parsed(T) {
-    const buffer = allocator.alloc(u8, @max(input.len, 256)) catch return error.OutOfMemory;
+    const pool_size = std.math.mul(usize, input.len, 4) catch return error.OutOfMemory;
+    const buffer = allocator.alloc(u8, @max(pool_size, 256)) catch return error.OutOfMemory;
     errdefer allocator.free(buffer);
 
     var fallback = std.heap.ArenaAllocator.init(allocator);
@@ -361,29 +362,67 @@ fn unescapeString(allocator: Allocator, raw: []const u8) Error![]u8 {
             continue;
         }
 
-        index += 1;
-        if (index == raw.len) return error.UnexpectedEof;
-        switch (raw[index]) {
-            '"' => try appendByte(&result, allocator, '"'),
-            '\\' => try appendByte(&result, allocator, '\\'),
-            '/' => try appendByte(&result, allocator, '/'),
-            'b' => try appendByte(&result, allocator, 0x08),
-            'f' => try appendByte(&result, allocator, 0x0c),
-            'n' => try appendByte(&result, allocator, '\n'),
-            'r' => try appendByte(&result, allocator, '\r'),
-            't' => try appendByte(&result, allocator, '\t'),
+        if (index + 1 >= raw.len) return error.UnexpectedEof;
+        switch (raw[index + 1]) {
+            '"' => {
+                try appendByte(&result, allocator, '"');
+                index += 2;
+            },
+            '\\' => {
+                try appendByte(&result, allocator, '\\');
+                index += 2;
+            },
+            '/' => {
+                try appendByte(&result, allocator, '/');
+                index += 2;
+            },
+            'b' => {
+                try appendByte(&result, allocator, 0x08);
+                index += 2;
+            },
+            'f' => {
+                try appendByte(&result, allocator, 0x0c);
+                index += 2;
+            },
+            'n' => {
+                try appendByte(&result, allocator, '\n');
+                index += 2;
+            },
+            'r' => {
+                try appendByte(&result, allocator, '\r');
+                index += 2;
+            },
+            't' => {
+                try appendByte(&result, allocator, '\t');
+                index += 2;
+            },
             'u' => {
-                if (index + 5 > raw.len) return error.UnexpectedEof;
-                const codepoint = std.fmt.parseInt(u21, raw[index + 1 .. index + 5], 16) catch return error.InvalidUnicode;
-                if (codepoint >= 0xd800 and codepoint <= 0xdfff) return error.InvalidUnicode;
+                if (index + 6 > raw.len) return error.UnexpectedEof;
+                const codepoint = std.fmt.parseInt(u16, raw[index + 2 .. index + 6], 16) catch return error.InvalidUnicode;
+                var decoded: u21 = codepoint;
+
+                if (codepoint >= 0xd800 and codepoint <= 0xdbff) {
+                    if (index + 12 > raw.len or raw[index + 6] != '\\' or raw[index + 7] != 'u') {
+                        return error.InvalidUnicode;
+                    }
+                    const low = std.fmt.parseInt(u16, raw[index + 8 .. index + 12], 16) catch return error.InvalidUnicode;
+                    if (low < 0xdc00 or low > 0xdfff) return error.InvalidUnicode;
+                    decoded = 0x10000 +
+                        (@as(u21, codepoint) - 0xd800) * 0x400 +
+                        (@as(u21, low) - 0xdc00);
+                    index += 12;
+                } else if (codepoint >= 0xdc00 and codepoint <= 0xdfff) {
+                    return error.InvalidUnicode;
+                } else {
+                    index += 6;
+                }
+
                 var buffer: [4]u8 = undefined;
-                const length = std.unicode.utf8Encode(codepoint, &buffer) catch return error.InvalidUnicode;
+                const length = std.unicode.utf8Encode(decoded, &buffer) catch return error.InvalidUnicode;
                 result.appendSlice(allocator, buffer[0..length]) catch return error.OutOfMemory;
-                index += 4;
             },
             else => return error.InvalidEscape,
         }
-        index += 1;
     }
     return result.toOwnedSlice(allocator) catch error.OutOfMemory;
 }
@@ -414,6 +453,25 @@ test "borrowed strings" {
     const input = "\"jsonz\"";
     const value = try fromSliceBorrowed([]const u8, testing.allocator, input, .{});
     try testing.expect(value.ptr == input.ptr + 1);
+}
+
+test "unicode surrogate pair" {
+    const value = try fromSlice([]const u8, testing.allocator, "\"\\uD83D\\uDE00\"", .{});
+    defer testing.allocator.free(value);
+    try testing.expectEqualStrings("\u{1F600}", value);
+}
+
+test "multiple unicode surrogate pairs" {
+    const value = try fromSlice([]const u8, testing.allocator, "\"\\uD83D\\uDE39\\uD83D\\uDC8D\"", .{});
+    defer testing.allocator.free(value);
+    try testing.expectEqualStrings("\u{1F639}\u{1F48D}", value);
+}
+
+test "unicode noncharacters" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const value = try fromSlice([]const []const u8, arena.allocator(), "[\"\\uFFFF\",\"\\uFDD0\",\"\\uFFFE\"]", .{});
+    try testing.expectEqual(@as(usize, 3), value.len);
 }
 
 test "integer bounds" {

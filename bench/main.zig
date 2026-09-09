@@ -27,6 +27,27 @@ const typed_datasets = [_][]const u8{
 
 const Mode = enum { dynamic, typed };
 
+const Timing = struct {
+    elapsed: u64,
+    output_bytes: usize,
+};
+
+const GeometricMean = struct {
+    log_sum: f64 = 0,
+    count: usize = 0,
+
+    fn add(self: *GeometricMean, elapsed: u64, bytes: usize, repeats: usize) void {
+        const seconds = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_s;
+        const mib_per_second = @as(f64, @floatFromInt(bytes * repeats)) / seconds / (1024 * 1024);
+        self.log_sum += @log(mib_per_second);
+        self.count += 1;
+    }
+
+    fn value(self: GeometricMean) f64 {
+        return @exp(self.log_sum / @as(f64, @floatFromInt(self.count)));
+    }
+};
+
 const TwitterUser = struct {
     id: u64,
     name: []const u8,
@@ -132,6 +153,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
     std.debug.print("jsonz benchmark ({s})\n", .{@tagName(@import("builtin").mode)});
     std.debug.print("data: bench/json, input read and cleanup excluded\n", .{});
 
+    var jsonz_decode_geomean = GeometricMean{};
+    var jsonz_encode_geomean = GeometricMean{};
+    var std_decode_geomean = GeometricMean{};
+    var std_encode_geomean = GeometricMean{};
+
     for (datasets) |name| {
         if (mode == .typed and !isTypedDataset(name)) continue;
         if (selected_file) |file| if (!std.mem.eql(u8, file, name)) continue;
@@ -149,18 +175,48 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const repeats = repeatCount(input.len);
         std.debug.print("\n{s} ({d} bytes, {d} repeats)\n", .{ name, input.len, repeats });
 
-        const jsonz_time = if (mode == .dynamic)
+        const jsonz_decode = if (mode == .dynamic)
             try benchJsonz(input, repeats)
         else
             try benchJsonzTyped(name, input, repeats);
-        printResult("jsonz", jsonz_time, input.len, repeats);
-        if (!jsonz_only) {
-            const std_time = if (mode == .dynamic)
-                try benchStd(input, repeats)
-            else
-                try benchStdTyped(name, input, repeats);
-            printResult("std.json", std_time, input.len, repeats);
+        const jsonz_encode = if (mode == .dynamic)
+            try benchJsonzEncode(input, repeats)
+        else
+            try benchJsonzTypedEncode(name, input, repeats);
+        const std_decode: ?u64 = if (jsonz_only)
+            null
+        else if (mode == .dynamic)
+            try benchStd(input, repeats)
+        else
+            try benchStdTyped(name, input, repeats);
+        const std_encode: ?Timing = if (jsonz_only)
+            null
+        else if (mode == .dynamic)
+            try benchStdEncode(input, repeats)
+        else
+            try benchStdTypedEncode(name, input, repeats);
+
+        std.debug.print("  decode\n", .{});
+        printResult("jsonz", jsonz_decode, input.len, repeats);
+        if (std_decode) |elapsed| printResult("std.json", elapsed, input.len, repeats);
+        jsonz_decode_geomean.add(jsonz_decode, input.len, repeats);
+        if (std_decode) |elapsed| std_decode_geomean.add(elapsed, input.len, repeats);
+
+        std.debug.print("  encode\n", .{});
+        printResult("jsonz", jsonz_encode.elapsed, jsonz_encode.output_bytes, repeats);
+        if (std_encode) |timing| printResult("std.json", timing.elapsed, timing.output_bytes, repeats);
+        jsonz_encode_geomean.add(jsonz_encode.elapsed, jsonz_encode.output_bytes, repeats);
+        if (std_encode) |timing| {
+            std_encode_geomean.add(timing.elapsed, timing.output_bytes, repeats);
         }
+    }
+
+    std.debug.print("\ngeometric mean throughput\n", .{});
+    printGeometricMean("jsonz", "decode", jsonz_decode_geomean);
+    printGeometricMean("jsonz", "encode", jsonz_encode_geomean);
+    if (!jsonz_only) {
+        printGeometricMean("std.json", "decode", std_decode_geomean);
+        printGeometricMean("std.json", "encode", std_encode_geomean);
     }
 }
 
@@ -227,6 +283,42 @@ fn benchStd(input: []const u8, repeats: usize) !u64 {
     return elapsed;
 }
 
+fn benchJsonzEncode(input: []const u8, repeats: usize) !Timing {
+    var fixture = try jsonz.dom.parse(input, .{});
+    defer fixture.deinit();
+    const warmup = try fixture.toSlice(allocator, .{});
+    defer allocator.free(warmup);
+
+    var elapsed: u64 = 0;
+    for (0..repeats) |_| {
+        const start = nowNs();
+        const output = try fixture.toSlice(allocator, .{});
+        const end = nowNs();
+        std.mem.doNotOptimizeAway(output.ptr);
+        allocator.free(output);
+        elapsed += @max(end - start, 1);
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
+fn benchStdEncode(input: []const u8, repeats: usize) !Timing {
+    var fixture = try std.json.parseFromSlice(std.json.Value, allocator, input, .{});
+    defer fixture.deinit();
+    const warmup = try std.json.Stringify.valueAlloc(allocator, fixture.value, .{});
+    defer allocator.free(warmup);
+
+    var elapsed: u64 = 0;
+    for (0..repeats) |_| {
+        const start = nowNs();
+        const output = try std.json.Stringify.valueAlloc(allocator, fixture.value, .{});
+        const end = nowNs();
+        std.mem.doNotOptimizeAway(output.ptr);
+        allocator.free(output);
+        elapsed += @max(end - start, 1);
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
 fn benchJsonzTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
     return switch (typedType(name)) {
         .canada => benchTypedJsonz(CanadaDocument, input, repeats),
@@ -242,6 +334,24 @@ fn benchStdTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
         .github_events => benchTypedStd([]const GithubEvent, input, repeats),
         .poet => benchTypedStd([]const Poem, input, repeats),
         .twitter => benchTypedStd(TwitterDocument, input, repeats),
+    };
+}
+
+fn benchJsonzTypedEncode(name: []const u8, input: []const u8, repeats: usize) !Timing {
+    return switch (typedType(name)) {
+        .canada => benchTypedJsonzEncode(CanadaDocument, input, repeats),
+        .github_events => benchTypedJsonzEncode([]const GithubEvent, input, repeats),
+        .poet => benchTypedJsonzEncode([]const Poem, input, repeats),
+        .twitter => benchTypedJsonzEncode(TwitterDocument, input, repeats),
+    };
+}
+
+fn benchStdTypedEncode(name: []const u8, input: []const u8, repeats: usize) !Timing {
+    return switch (typedType(name)) {
+        .canada => benchTypedStdEncode(CanadaDocument, input, repeats),
+        .github_events => benchTypedStdEncode([]const GithubEvent, input, repeats),
+        .poet => benchTypedStdEncode([]const Poem, input, repeats),
+        .twitter => benchTypedStdEncode(TwitterDocument, input, repeats),
     };
 }
 
@@ -290,6 +400,43 @@ fn benchTypedStd(comptime T: type, input: []const u8, repeats: usize) !u64 {
     return elapsed;
 }
 
+fn benchTypedJsonzEncode(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    var fixture = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
+    defer fixture.deinit();
+    const warmup = try jsonz.typed.toSlice(allocator, fixture.value, .{});
+    defer allocator.free(warmup);
+
+    var elapsed: u64 = 0;
+    for (0..repeats) |_| {
+        const start = nowNs();
+        const output = try jsonz.typed.toSlice(allocator, fixture.value, .{});
+        const end = nowNs();
+        std.mem.doNotOptimizeAway(output.ptr);
+        allocator.free(output);
+        elapsed += @max(end - start, 1);
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
+fn benchTypedStdEncode(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    var fixture_arena = std.heap.ArenaAllocator.init(allocator);
+    defer fixture_arena.deinit();
+    const fixture = try std.json.parseFromSliceLeaky(T, fixture_arena.allocator(), input, .{ .ignore_unknown_fields = true });
+    const warmup = try std.json.Stringify.valueAlloc(allocator, fixture, .{});
+    defer allocator.free(warmup);
+
+    var elapsed: u64 = 0;
+    for (0..repeats) |_| {
+        const start = nowNs();
+        const output = try std.json.Stringify.valueAlloc(allocator, fixture, .{});
+        const end = nowNs();
+        std.mem.doNotOptimizeAway(output.ptr);
+        allocator.free(output);
+        elapsed += @max(end - start, 1);
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
 fn nowNs() u64 {
     if (comptime @hasDecl(std.time, "nanoTimestamp")) {
         return @intCast(std.time.nanoTimestamp());
@@ -308,5 +455,14 @@ fn printResult(name: []const u8, elapsed: u64, bytes: usize, repeats: usize) voi
         name,
         milliseconds,
         mebibytes_per_second,
+    });
+}
+
+fn printGeometricMean(name: []const u8, operation: []const u8, geomean: GeometricMean) void {
+    std.debug.print("  {s} {s}: {d:.2} MiB/s ({d} datasets)\n", .{
+        name,
+        operation,
+        geomean.value(),
+        geomean.count,
     });
 }

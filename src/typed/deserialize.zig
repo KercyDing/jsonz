@@ -18,11 +18,16 @@ pub const Error = cursor_mod.Error || error{
 };
 
 pub const Options = struct {
+    /// Ignore JSON object fields that have no matching field in the target type.
     ignore_unknown_fields: bool = false,
+    /// Reject input nested deeper than this many arrays or objects.
     max_depth: u32 = 256,
 };
 
-/// Owns a parsed value and all memory allocated for it.
+/// The owning result returned by `parse`.
+///
+/// `value` and all slices reachable from it remain valid until `deinit` is
+/// called. The result owns its backing buffer and must be deinitialized once.
 pub fn Parsed(comptime T: type) type {
     return struct {
         value: T,
@@ -30,12 +35,14 @@ pub fn Parsed(comptime T: type) type {
         fallback_arena: std.heap.ArenaAllocator,
         backing_allocator: Allocator,
 
+        /// Releases all allocations made while parsing and invalidates `value`.
         pub fn deinit(self: *@This()) void {
             self.fallback_arena.deinit();
             self.backing_allocator.free(self.buffer);
             self.* = undefined;
         }
 
+        /// Serializes `value` to a new JSON byte slice owned by `allocator`.
         pub fn toSlice(
             self: *const @This(),
             allocator: Allocator,
@@ -44,6 +51,7 @@ pub fn Parsed(comptime T: type) type {
             return serialize_mod.toSlice(allocator, self.value, options);
         }
 
+        /// Serializes `value` directly to `writer`.
         pub fn toWriter(
             self: *const @This(),
             writer: *std.Io.Writer,
@@ -54,12 +62,15 @@ pub fn Parsed(comptime T: type) type {
     };
 }
 
+/// Low-level typed deserializer used by custom `jsonzDeserialize` hooks.
+/// Most applications should call `parse`, `parseBorrowed`, or `parseInto`.
 pub const Deserializer = struct {
     cursor: Cursor,
     allocator: Allocator,
     options: Options,
     borrow_strings: bool,
 
+    /// Creates a deserializer that owns decoded strings through `allocator`.
     pub fn init(allocator: Allocator, input: []const u8, options: Options) Deserializer {
         return .{
             .cursor = .{ .input = input, .max_depth = options.max_depth },
@@ -69,16 +80,20 @@ pub const Deserializer = struct {
         };
     }
 
+    /// Creates a deserializer that borrows unescaped strings from `input`.
+    /// Strings containing JSON escapes are decoded into memory from `allocator`.
     pub fn initBorrowed(allocator: Allocator, input: []const u8, options: Options) Deserializer {
         var deserializer = init(allocator, input, options);
         deserializer.borrow_strings = true;
         return deserializer;
     }
 
+    /// Deserializes the next JSON value as `T`.
     pub fn deserialize(self: *Deserializer, comptime T: type) Error!T {
         return deserializeValue(T, self);
     }
 
+    /// Deserializes the next value as a JSON boolean.
     pub fn deserializeBool(self: *Deserializer) Error!bool {
         return switch (try self.cursor.next()) {
             .true_lit => true,
@@ -87,6 +102,7 @@ pub const Deserializer = struct {
         };
     }
 
+    /// Deserializes the next JSON number as integer type `T`.
     pub fn deserializeInt(self: *Deserializer, comptime T: type) Error!T {
         if (comptime @typeInfo(T).int.bits <= 64) return self.cursor.readInt(T);
         return switch (try self.cursor.next()) {
@@ -95,6 +111,7 @@ pub const Deserializer = struct {
         };
     }
 
+    /// Deserializes the next JSON number as floating-point type `T`.
     pub fn deserializeFloat(self: *Deserializer, comptime T: type) Error!T {
         return switch (try self.cursor.next()) {
             .number => |raw| std.fmt.parseFloat(T, raw) catch error.InvalidNumber,
@@ -102,6 +119,7 @@ pub const Deserializer = struct {
         };
     }
 
+    /// Deserializes the next JSON string, borrowing or allocating according to this deserializer.
     pub fn deserializeString(self: *Deserializer) Error![]const u8 {
         const raw = switch (try self.cursor.next()) {
             .string => |value| value,
@@ -111,7 +129,8 @@ pub const Deserializer = struct {
         return self.materializeString(raw);
     }
 
-    /// Materializes the string token most recently returned by the cursor.
+    /// Converts a raw string token to decoded UTF-8, borrowing it when possible.
+    /// `raw` must be the most recent string token returned by this deserializer's cursor.
     pub fn materializeString(self: *Deserializer, raw: []const u8) Error![]const u8 {
         if (!self.cursor.last_string_has_escape) {
             if (self.borrow_strings) return raw;
@@ -128,6 +147,10 @@ fn parseAllocating(comptime T: type, allocator: Allocator, input: []const u8, op
     return value;
 }
 
+/// Parses JSON while borrowing unescaped strings from `input`.
+///
+/// The returned value borrows `input`; escaped strings and container metadata
+/// may use `allocator`. Keep both alive for as long as the returned value is used.
 pub fn parseBorrowed(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
     var deserializer = Deserializer.initBorrowed(allocator, input, options);
     const value = try deserializer.deserialize(T);
@@ -135,13 +158,19 @@ pub fn parseBorrowed(comptime T: type, allocator: Allocator, input: []const u8, 
     return value;
 }
 
-/// Parses using caller-provided storage. The returned value borrows `buffer`.
+/// Parses JSON using `buffer` for allocations.
+///
+/// The returned value borrows `buffer`, so callers must keep it alive. Returns
+/// `error.OutOfMemory` when the buffer cannot hold the parsed representation.
 pub fn parseInto(comptime T: type, buffer: []u8, input: []const u8, options: Options) Error!T {
     var fixed_buffer = std.heap.FixedBufferAllocator.init(buffer);
     return parseAllocating(T, fixed_buffer.allocator(), input, options);
 }
 
-/// Parses into a contiguous pool released by `Parsed.deinit`.
+/// Parses JSON into an owning `Parsed(T)` result.
+///
+/// This is the convenient default for typed parsing: call `deinit` on the
+/// returned value when finished.
 pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!Parsed(T) {
     const pool_size = std.math.mul(usize, input.len, 4) catch return error.OutOfMemory;
     const buffer = allocator.alloc(u8, @max(pool_size, 256)) catch return error.OutOfMemory;

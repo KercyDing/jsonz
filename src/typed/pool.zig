@@ -3,10 +3,17 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
 
+/// An allocator that uses caller-provided storage before falling back to
+/// another allocator.
+///
+/// The backing buffer must remain valid for as long as allocations from the
+/// allocator returned by `allocator` may be used. Fallback allocations retain
+/// the ownership rules of `fallback_allocator`.
 pub const Pool = struct {
     fixed_buffer: std.heap.FixedBufferAllocator,
     fallback_allocator: Allocator,
 
+    /// Creates a pool backed by `buffer`, with `fallback` used after it fills.
     pub fn init(buffer: []u8, fallback: Allocator) Pool {
         return .{
             .fixed_buffer = .init(buffer),
@@ -14,6 +21,10 @@ pub const Pool = struct {
         };
     }
 
+    /// Returns an allocator view backed by this pool.
+    ///
+    /// The returned allocator borrows `self`; do not use it after the pool is
+    /// moved or destroyed.
     pub fn allocator(self: *Pool) Allocator {
         return .{
             .ptr = self,

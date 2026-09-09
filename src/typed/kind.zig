@@ -4,27 +4,35 @@ const std = @import("std");
 
 const split_fields = !@hasField(std.builtin.Type.Struct, "fields");
 
+/// Version-independent reflection metadata for one struct field.
 pub const StructField = struct {
     name: [:0]const u8,
     type: type,
     default_value_ptr: ?*const anyopaque,
 
+    /// Returns the field's compile-time default, or `null` when it has none.
     pub fn defaultValue(comptime field: StructField) ?field.type {
         const value: *const field.type = @ptrCast(@alignCast(field.default_value_ptr orelse return null));
         return value.*;
     }
 };
 
+/// Version-independent reflection metadata for one enum field.
 pub const EnumField = struct {
     name: [:0]const u8,
     value: comptime_int,
 };
 
+/// Version-independent reflection metadata for one union field.
 pub const UnionField = struct {
     name: [:0]const u8,
     type: type,
 };
 
+/// Returns reflection metadata for the fields of struct `T`.
+///
+/// The normalized `StructField` form is used on Zig versions whose builtin
+/// reflection metadata stores field attributes in separate arrays.
 pub fn structFields(comptime T: type) []const if (split_fields) StructField else std.builtin.Type.StructField {
     const info = @typeInfo(T).@"struct";
     comptime if (!split_fields) return info.fields;
@@ -40,6 +48,7 @@ pub fn structFields(comptime T: type) []const if (split_fields) StructField else
     return fields;
 }
 
+/// Returns reflection metadata for the fields of enum `T`.
 pub fn enumFields(comptime T: type) []const if (split_fields) EnumField else std.builtin.Type.EnumField {
     const info = @typeInfo(T).@"enum";
     comptime if (!split_fields) return info.fields;
@@ -51,6 +60,7 @@ pub fn enumFields(comptime T: type) []const if (split_fields) EnumField else std
     return fields;
 }
 
+/// Returns reflection metadata for the fields of union `T`.
 pub fn unionFields(comptime T: type) []const if (split_fields) UnionField else std.builtin.Type.UnionField {
     const info = @typeInfo(T).@"union";
     comptime if (!split_fields) return info.fields;

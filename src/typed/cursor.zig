@@ -1,5 +1,10 @@
 const std = @import("std");
 
+/// The next JSON syntax item returned by `Cursor.next` or `Cursor.peek`.
+///
+/// The `string` and `number` payloads borrow the cursor input. A string payload
+/// is still JSON-escaped; inspect `Cursor.last_string_has_escape` to determine
+/// whether it needs unescaping.
 pub const Token = union(enum) {
     object_begin,
     object_end,
@@ -12,6 +17,7 @@ pub const Token = union(enum) {
     null_lit,
 };
 
+/// Errors reported while tokenizing or structurally skipping JSON input.
 pub const Error = error{
     UnexpectedToken,
     UnexpectedEof,
@@ -21,13 +27,23 @@ pub const Error = error{
     MaxDepthExceeded,
 };
 
+/// A stateful, allocation-free cursor over one JSON document.
+///
+/// Methods advance `pos` when they succeed. The input slice must remain alive
+/// while tokens or string/number payloads borrowed from it are in use.
 pub const Cursor = struct {
+    /// Complete JSON input being scanned.
     input: []const u8,
+    /// Offset of the next byte to consume.
     pos: usize = 0,
+    /// Number of currently open arrays and objects.
     depth: u32 = 0,
+    /// Maximum allowed nesting depth.
     max_depth: u32 = 256,
+    /// Whether the string returned by the most recent `next` contained `\\`.
     last_string_has_escape: bool = false,
 
+    /// Consumes and returns the next JSON token, skipping leading whitespace.
     pub inline fn next(self: *Cursor) Error!Token {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
@@ -46,6 +62,7 @@ pub const Cursor = struct {
         };
     }
 
+    /// Returns the next token without advancing this cursor.
     pub fn peek(self: *Cursor) Error!Token {
         const pos = self.pos;
         const depth = self.depth;
@@ -58,6 +75,7 @@ pub const Cursor = struct {
         return self.next();
     }
 
+    /// Consumes a required object key/value separator (`:`).
     pub fn expectColon(self: *Cursor) Error!void {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
@@ -65,6 +83,7 @@ pub const Cursor = struct {
         self.pos += 1;
     }
 
+    /// Reads an integer token as `T`, rejecting floats and values outside `T`.
     pub inline fn readInt(self: *Cursor, comptime T: type) Error!T {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
@@ -121,8 +140,12 @@ pub const Cursor = struct {
         return result;
     }
 
+    /// The result of consuming a container separator or terminator.
     pub const ContainerStep = enum { end, more };
 
+    /// Consumes either `end` or the comma before another container element.
+    ///
+    /// `end` must be the matching `}` or `]` for the currently open container.
     pub inline fn finishContainer(self: *Cursor, end: u8) Error!ContainerStep {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
@@ -141,12 +164,15 @@ pub const Cursor = struct {
         return .more;
     }
 
+    /// Reports whether the current container is immediately followed by `end`.
+    /// This only inspects input; it does not consume the terminator.
     pub fn isContainerEmpty(self: *Cursor, end: u8) Error!bool {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
         return self.input[self.pos] == end;
     }
 
+    /// Validates and skips one complete JSON value, including nested children.
     pub fn skipValue(self: *Cursor) Error!void {
         self.skipWhitespace();
         if (self.pos == self.input.len) return error.UnexpectedEof;
@@ -182,6 +208,7 @@ pub const Cursor = struct {
         }
     }
 
+    /// Verifies that only trailing JSON whitespace remains.
     pub fn finish(self: *Cursor) Error!void {
         self.skipWhitespace();
         if (self.pos != self.input.len) return error.UnexpectedToken;
@@ -302,6 +329,7 @@ pub const Cursor = struct {
         self.pos += literal.len;
     }
 
+    /// Advances past JSON whitespace (` `, tab, LF, and CR).
     pub fn skipWhitespace(self: *Cursor) void {
         while (self.pos < self.input.len) {
             switch (self.input[self.pos]) {
@@ -310,6 +338,7 @@ pub const Cursor = struct {
             }
         }
     }
+    /// Returns the number of input bytes at or after the current position.
     pub fn remainingBytes(self: *const Cursor) usize {
         return self.input.len - @min(self.pos, self.input.len);
     }

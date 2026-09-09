@@ -2,31 +2,40 @@ const std = @import("std");
 const kind = @import("kind.zig");
 
 pub const Options = struct {
+    /// Format arrays and objects with indentation and line breaks.
     pretty: bool = false,
+    /// Number of spaces per indentation level when `pretty` is enabled.
     indent: u8 = 2,
 };
 
+/// Low-level typed serializer used by custom `jsonzSerialize` hooks.
+/// Most applications should call `toSlice` or `toWriter`.
 pub const Serializer = struct {
     writer: *std.Io.Writer,
     options: Options,
     depth: usize = 0,
 
+    /// Creates a serializer that writes JSON to `writer`.
     pub fn init(writer: *std.Io.Writer, options: Options) Serializer {
         return .{ .writer = writer, .options = options };
     }
 
+    /// Serializes any supported Zig value.
     pub fn serialize(self: *Serializer, value: anytype) std.Io.Writer.Error!void {
         return serializeValue(@TypeOf(value), value, self);
     }
 
+    /// Serializes a boolean literal.
     pub fn serializeBool(self: *Serializer, value: bool) std.Io.Writer.Error!void {
         try self.writer.writeAll(if (value) "true" else "false");
     }
 
+    /// Serializes an integer value.
     pub fn serializeInt(self: *Serializer, value: anytype) std.Io.Writer.Error!void {
         try self.writer.print("{d}", .{value});
     }
 
+    /// Serializes a finite floating-point value, or JSON `null` for NaN and infinities.
     pub fn serializeFloat(self: *Serializer, value: anytype) std.Io.Writer.Error!void {
         if (std.math.isFinite(value)) {
             try self.writer.print("{d}", .{value});
@@ -35,10 +44,12 @@ pub const Serializer = struct {
         }
     }
 
+    /// Serializes a UTF-8 byte slice as a JSON string with required escapes.
     pub fn serializeString(self: *Serializer, value: []const u8) std.Io.Writer.Error!void {
         try writeJsonString(self.writer, value);
     }
 
+    /// Serializes JSON `null`.
     pub fn serializeNull(self: *Serializer) std.Io.Writer.Error!void {
         try self.writer.writeAll("null");
     }
@@ -50,6 +61,7 @@ pub const Serializer = struct {
     }
 };
 
+/// Serializes a Zig value to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(allocator: std.mem.Allocator, value: anytype, options: Options) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
@@ -107,6 +119,7 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Erro
     try writer.writeByte('"');
 }
 
+/// Serializes a Zig value directly to `writer`.
 pub fn toWriter(writer: *std.Io.Writer, value: anytype, options: Options) !void {
     var serializer = Serializer.init(writer, options);
     try serializer.serialize(value);

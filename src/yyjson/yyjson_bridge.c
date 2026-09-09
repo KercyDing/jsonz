@@ -3,17 +3,71 @@
 #include <stdlib.h>
 #include <string.h>
 
-yyjson_doc *jsonz_yyjson_read(char *input, size_t len, bool comments, bool trailing, int *code) {
-    yyjson_read_err e;
-    yyjson_read_flag f = 0;
-    if (comments)
-        f |= YYJSON_READ_ALLOW_COMMENTS;
-    if (trailing)
-        f |= YYJSON_READ_ALLOW_TRAILING_COMMAS;
-    yyjson_doc *d = yyjson_read_opts(input, len, f, NULL, &e);
-    if (code)
-        *code = (int)e.code;
-    return d;
+static yyjson_read_flag jsonz_yyjson_read_flags(bool comments, bool trailing) {
+    yyjson_read_flag flags = 0;
+
+    if (comments) {
+        flags |= YYJSON_READ_ALLOW_COMMENTS;
+    }
+    if (trailing) {
+        flags |= YYJSON_READ_ALLOW_TRAILING_COMMAS;
+    }
+
+    return flags;
+}
+
+yyjson_doc *jsonz_yyjson_read(char *input, size_t len, bool comments,
+                              bool trailing, int *error_code) {
+    yyjson_read_err error;
+    yyjson_doc *document = yyjson_read_opts(
+        input,
+        len,
+        jsonz_yyjson_read_flags(comments, trailing),
+        NULL,
+        &error
+    );
+
+    if (error_code) {
+        *error_code = (int)error.code;
+    }
+
+    return document;
+}
+
+yyjson_doc *jsonz_yyjson_read_into(char *input, size_t len, bool comments,
+                                   bool trailing, void *buffer,
+                                   size_t buffer_len, int *error_code) {
+    yyjson_alc allocator;
+    yyjson_read_err error;
+
+    if (!yyjson_alc_pool_init(&allocator, buffer, buffer_len)) {
+        if (error_code) {
+            *error_code = YYJSON_READ_ERROR_MEMORY_ALLOCATION;
+        }
+        return NULL;
+    }
+
+    yyjson_doc *document = yyjson_read_opts(
+        input,
+        len,
+        jsonz_yyjson_read_flags(comments, trailing),
+        &allocator,
+        &error
+    );
+
+    if (error_code) {
+        *error_code = (int)error.code;
+    }
+
+    return document;
+}
+
+size_t jsonz_yyjson_read_buffer_size(size_t len, bool comments,
+                                     bool trailing) {
+    return yyjson_read_max_memory_usage(
+        len,
+        jsonz_yyjson_read_flags(comments, trailing)
+    );
 }
 
 void jsonz_yyjson_free(yyjson_doc *d) {
@@ -76,6 +130,11 @@ yyjson_val *jsonz_yyjson_index(const yyjson_val *v, size_t i) {
     while (x && i--)
         x = unsafe_yyjson_get_next(x);
     return x;
+}
+
+yyjson_val *jsonz_yyjson_object_get(const yyjson_val *v, const char *key,
+                                    size_t key_len) {
+    return yyjson_obj_getn(v, key, key_len);
 }
 
 yyjson_val *jsonz_yyjson_object_value(const yyjson_val *v, size_t i) {

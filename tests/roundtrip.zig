@@ -35,12 +35,11 @@ pub const Document = struct {
 };
 
 test "document round trip" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    const response = try jsonz.fromSlice(Document, arena.allocator(), content, .{
+    var parsed = try jsonz.typed.parse(Document, std.testing.allocator, content, .{
         .ignore_unknown_fields = true,
     });
+    defer parsed.deinit();
+    const response = parsed.value;
 
     try std.testing.expectEqual(@as(usize, 100), response.statuses.len);
     try std.testing.expectEqual(@as(u32, 100), response.search_metadata.count);
@@ -50,12 +49,12 @@ test "document round trip" {
     try std.testing.expectEqual(@as(?bool, false), response.statuses[1].possibly_sensitive);
     try std.testing.expectEqual(@as(?bool, null), response.statuses[0].possibly_sensitive);
 
-    const encoded = try jsonz.toSlice(std.testing.allocator, response, .{});
+    const encoded = try parsed.toSlice(std.testing.allocator, .{});
     defer std.testing.allocator.free(encoded);
 
-    var roundtrip_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer roundtrip_arena.deinit();
-    const roundtrip = try jsonz.fromSlice(Document, roundtrip_arena.allocator(), encoded, .{});
+    var roundtrip_parsed = try jsonz.typed.parse(Document, std.testing.allocator, encoded, .{});
+    defer roundtrip_parsed.deinit();
+    const roundtrip = roundtrip_parsed.value;
 
     try std.testing.expectEqual(response.statuses.len, roundtrip.statuses.len);
     try std.testing.expectEqual(response.statuses[99].id, roundtrip.statuses[99].id);

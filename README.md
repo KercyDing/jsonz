@@ -28,7 +28,7 @@ const jsonz = b.dependency("jsonz", .{
 exe.root_module.addImport("jsonz", jsonz.module("jsonz"));
 ```
 
-Use it from Zig:
+For a known schema, use `jsonz.typed`:
 
 ```zig
 const std = @import("std");
@@ -44,9 +44,10 @@ pub fn main(init: std.process.Init) !void {
 
     const input = "[{\"id\": 1,\"name\": \"hello\"},{\"id\": 2,\"name\": \"jsonz\"}]";
 
-    const user = try jsonz.fromSlice([]User, allocator, input, .{});
+    var parsed = try jsonz.typed.parse([]User, allocator, input, .{});
+    defer parsed.deinit();
 
-    const output = try jsonz.toSlice(allocator, user, .{
+    const output = try parsed.toSlice(allocator, .{
         .pretty = true,
     });
 
@@ -54,35 +55,60 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-For JSON without a known schema, use `parse`. The document owns the yyjson
-storage; values and strings borrow it until `deinit`:
+For JSON without a known schema, use `jsonz.dom`. The document owns the yyjson storage; values and strings borrow it until `deinit`:
 
 ```zig
 const input = "{\"name\":\"jsonz\"}";
-var document = try jsonz.parse(input, .{});
+var document = try jsonz.dom.parse(input, .{});
 defer document.deinit();
 
-const root = document.root();
-const name = root.object().?.get("name").?.string().?;
-const output = try jsonz.toSliceValue(allocator, root, .{});
+const name = document.field("name").string();
+const output = try document.toSlice(allocator, .{});
 ```
 
-### Choose an API
+### Typed API
 
 | API | Use it when | Notes |
 | --- | --- | --- |
-| `fromSlice` | You want to decode JSON normally | Strings are copied using the allocator. |
-| `fromSliceBorrowed` | You want to avoid copying simple strings | Keep the input JSON alive while using the result. |
-| `fromSliceInto` | You already have a fixed-size buffer | Fails if the buffer is too small. |
-| `fromSliceOwned` | You want one owned typed result | Returns `Parsed(T)`; call `.deinit()` when done. |
-| `parse` | You do not know the JSON schema | Returns a DOM `Document`; call `.deinit()` when done. |
-| `toSlice` | You want serialized JSON as `[]u8` | The returned bytes belong to the allocator. |
-| `toSliceValue` | You want to serialize a DOM value | The returned bytes belong to the allocator. |
-| `toWriter` | You want to write JSON directly to a writer | Does not create an output slice. |
+| `typed.parse` | You want an owning typed result | Returns `Parsed(T)`; call `.deinit()` when done. |
+| `typed.parseBorrowed` | You want strings to borrow the input | Keep the input and allocator-owned data alive. |
+| `typed.parseInto` | You provide storage for allocations | Fails if the buffer is too small. |
+| `typed.toSlice` | You want serialized JSON as `[]u8` | The returned bytes belong to the allocator. |
+| `typed.toWriter` | You want to write JSON directly | Does not create an output slice. |
 
-All decode functions take `options`; use `.{}` for the defaults. Common decode options are `.ignore_unknown_fields = true` to skip extra JSON fields and `.max_depth = 256` to limit nesting.
+`Parsed(T)` also provides `.toSlice()` and `.toWriter()` methods for its value.
 
-Serialization options are `.pretty = true` for readable output and `.indent = 4` to choose the indentation width.
+### DOM API
+
+Use `get` when a field or index may be absent, and `field` or `at` when its
+presence is an invariant. Type checks return `bool`; value accessors assert that the type matches:
+
+```zig
+if (document.get("name")) |name| {
+    if (name.isString()) {
+        std.debug.print("{s}\n", .{name.string()});
+    }
+}
+
+const first = document.field("items").array().at(0);
+```
+
+Caller-provided DOM storage is sized and used explicitly:
+
+```zig
+const size = jsonz.dom.parseBufferSize(input.len, .{});
+const storage = try allocator.alloc(u8, size);
+defer allocator.free(storage);
+
+var document = try jsonz.dom.parseInto(storage, input, .{});
+defer document.deinit();
+```
+
+All parse functions take `options`; use `.{}` for the defaults. Common typed
+options are `.ignore_unknown_fields = true` and `.max_depth = 256`.
+
+Typed serialization supports `.pretty = true` and a configurable `.indent`.
+DOM serialization currently supports `.pretty = true`.
 
 ## Development
 

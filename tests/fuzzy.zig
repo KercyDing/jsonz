@@ -43,13 +43,13 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    _ = jsonz.fromSlice(FuzzTarget, allocator, input.items, .{ .ignore_unknown_fields = true }) catch {};
-    _ = jsonz.fromSlice(bool, allocator, input.items, .{}) catch {};
-    _ = jsonz.fromSlice(i32, allocator, input.items, .{}) catch {};
-    _ = jsonz.fromSlice([]const i32, allocator, input.items, .{}) catch {};
-    _ = jsonz.fromSlice(Address, allocator, input.items, .{}) catch {};
-    _ = jsonz.fromSlice(Role, allocator, input.items, .{}) catch {};
-    _ = jsonz.fromSlice(Action, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(FuzzTarget, allocator, input.items, .{ .ignore_unknown_fields = true }) catch {};
+    _ = jsonz.typed.parseBorrowed(bool, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(i32, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed([]const i32, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(Address, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(Role, allocator, input.items, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(Action, allocator, input.items, .{}) catch {};
 }
 
 fn writeTarget(smith: *std.testing.Smith, out: *std.ArrayList(u8)) anyerror!void {

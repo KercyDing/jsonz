@@ -2,6 +2,7 @@ const std = @import("std");
 const kind = @import("kind.zig");
 const cursor_mod = @import("cursor.zig");
 const pool_mod = @import("pool.zig");
+const serialize_mod = @import("serialize.zig");
 
 const Allocator = std.mem.Allocator;
 const Cursor = cursor_mod.Cursor;
@@ -33,6 +34,22 @@ pub fn Parsed(comptime T: type) type {
             self.fallback_arena.deinit();
             self.backing_allocator.free(self.buffer);
             self.* = undefined;
+        }
+
+        pub fn toSlice(
+            self: *const @This(),
+            allocator: Allocator,
+            options: serialize_mod.Options,
+        ) ![]u8 {
+            return serialize_mod.toSlice(allocator, self.value, options);
+        }
+
+        pub fn toWriter(
+            self: *const @This(),
+            writer: *std.Io.Writer,
+            options: serialize_mod.Options,
+        ) !void {
+            return serialize_mod.toWriter(writer, self.value, options);
         }
     };
 }
@@ -104,14 +121,14 @@ pub const Deserializer = struct {
     }
 };
 
-pub fn fromSlice(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
+fn parseAllocating(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
     var deserializer = Deserializer.init(allocator, input, options);
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
     return value;
 }
 
-pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
+pub fn parseBorrowed(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
     var deserializer = Deserializer.initBorrowed(allocator, input, options);
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
@@ -119,9 +136,9 @@ pub fn fromSliceBorrowed(comptime T: type, allocator: Allocator, input: []const 
 }
 
 /// Parses using caller-provided storage. The returned value borrows `buffer`.
-pub fn fromSliceInto(comptime T: type, buffer: []u8, input: []const u8, options: Options) Error!T {
+pub fn parseInto(comptime T: type, buffer: []u8, input: []const u8, options: Options) Error!T {
     var fixed_buffer = std.heap.FixedBufferAllocator.init(buffer);
-    return fromSlice(T, fixed_buffer.allocator(), input, options);
+    return parseAllocating(T, fixed_buffer.allocator(), input, options);
 }
 
 /// Parses into a contiguous pool released by `Parsed.deinit`.
@@ -133,7 +150,7 @@ pub fn parse(comptime T: type, allocator: Allocator, input: []const u8, options:
     var fallback = std.heap.ArenaAllocator.init(allocator);
     errdefer fallback.deinit();
     var pool = pool_mod.Pool.init(buffer, fallback.allocator());
-    const value = try fromSlice(T, pool.allocator(), input, options);
+    const value = try parseAllocating(T, pool.allocator(), input, options);
 
     return .{
         .value = value,
@@ -448,7 +465,7 @@ test "nested values" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const user = try fromSlice(User, arena.allocator(), "{\"id\":7,\"name\":\"jsonz\",\"flags\":[true,false]}", .{});
+    const user = try parseAllocating(User, arena.allocator(), "{\"id\":7,\"name\":\"jsonz\",\"flags\":[true,false]}", .{});
     try testing.expectEqual(@as(u32, 7), user.id);
     try testing.expectEqualStrings("jsonz", user.name);
     try testing.expectEqualSlices(bool, &.{ true, false }, user.flags);
@@ -456,7 +473,7 @@ test "nested values" {
 
 test "borrowed strings" {
     const input = "\"jsonz\"";
-    const value = try fromSliceBorrowed([]const u8, testing.allocator, input, .{});
+    const value = try parseBorrowed([]const u8, testing.allocator, input, .{});
     try testing.expect(value.ptr == input.ptr + 1);
 }
 
@@ -477,19 +494,19 @@ test "custom string token" {
         }
     };
 
-    const parsed = try fromSlice(StringValue, testing.allocator, "\"json\\nz\"", .{});
+    const parsed = try parseAllocating(StringValue, testing.allocator, "\"json\\nz\"", .{});
     defer testing.allocator.free(parsed.value);
     try testing.expectEqualStrings("json\nz", parsed.value);
 }
 
 test "unicode surrogate pair" {
-    const value = try fromSlice([]const u8, testing.allocator, "\"\\uD83D\\uDE00\"", .{});
+    const value = try parseAllocating([]const u8, testing.allocator, "\"\\uD83D\\uDE00\"", .{});
     defer testing.allocator.free(value);
     try testing.expectEqualStrings("\u{1F600}", value);
 }
 
 test "multiple unicode surrogate pairs" {
-    const value = try fromSlice([]const u8, testing.allocator, "\"\\uD83D\\uDE39\\uD83D\\uDC8D\"", .{});
+    const value = try parseAllocating([]const u8, testing.allocator, "\"\\uD83D\\uDE39\\uD83D\\uDC8D\"", .{});
     defer testing.allocator.free(value);
     try testing.expectEqualStrings("\u{1F639}\u{1F48D}", value);
 }
@@ -497,18 +514,18 @@ test "multiple unicode surrogate pairs" {
 test "unicode noncharacters" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const value = try fromSlice([]const []const u8, arena.allocator(), "[\"\\uFFFF\",\"\\uFDD0\",\"\\uFFFE\"]", .{});
+    const value = try parseAllocating([]const []const u8, arena.allocator(), "[\"\\uFFFF\",\"\\uFDD0\",\"\\uFFFE\"]", .{});
     try testing.expectEqual(@as(usize, 3), value.len);
 }
 
 test "integer bounds" {
-    try testing.expectEqual(std.math.maxInt(u64), try fromSlice(u64, testing.allocator, "18446744073709551615", .{}));
-    try testing.expectEqual(std.math.minInt(i64), try fromSlice(i64, testing.allocator, "-9223372036854775808", .{}));
-    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "18446744073709551616", .{}));
-    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "9223372036854775808", .{}));
-    try testing.expectError(error.InvalidNumber, fromSlice(i64, testing.allocator, "-9223372036854775809", .{}));
-    try testing.expectError(error.InvalidNumber, fromSlice(u64, testing.allocator, "-1", .{}));
-    try testing.expectError(error.InvalidNumber, fromSlice(u32, testing.allocator, "1.0", .{}));
+    try testing.expectEqual(std.math.maxInt(u64), try parseAllocating(u64, testing.allocator, "18446744073709551615", .{}));
+    try testing.expectEqual(std.math.minInt(i64), try parseAllocating(i64, testing.allocator, "-9223372036854775808", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(u64, testing.allocator, "18446744073709551616", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(i64, testing.allocator, "9223372036854775808", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(i64, testing.allocator, "-9223372036854775809", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(u64, testing.allocator, "-1", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(u32, testing.allocator, "1.0", .{}));
 }
 
 test "caller buffer" {
@@ -518,7 +535,7 @@ test "caller buffer" {
     };
 
     var buffer: [512]u8 = undefined;
-    const user = try fromSliceInto(User, &buffer, "{\"name\":\"jsonz\",\"tags\":[\"zig\",\"json\"]}", .{});
+    const user = try parseInto(User, &buffer, "{\"name\":\"jsonz\",\"tags\":[\"zig\",\"json\"]}", .{});
 
     try testing.expectEqualStrings("jsonz", user.name);
     try testing.expectEqualStrings("zig", user.tags[0]);
@@ -527,7 +544,7 @@ test "caller buffer" {
 
 test "caller buffer capacity" {
     var buffer: [1]u8 = undefined;
-    try testing.expectError(error.OutOfMemory, fromSliceInto([]const u8, &buffer, "\"jsonz\"", .{}));
+    try testing.expectError(error.OutOfMemory, parseInto([]const u8, &buffer, "\"jsonz\"", .{}));
 }
 
 test "parsed value" {
@@ -536,6 +553,11 @@ test "parsed value" {
 
     try testing.expectEqualStrings("one", parsed.value[0]);
     try testing.expectEqualStrings("two", parsed.value[1]);
+
+    var writer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer writer.deinit();
+    try parsed.toWriter(&writer.writer, .{});
+    try testing.expectEqualStrings("[\"one\",\"two\"]", writer.written());
 }
 
 test "parsed value fallback" {

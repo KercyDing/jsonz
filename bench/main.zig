@@ -195,13 +195,13 @@ fn repeatCount(size: usize) usize {
 }
 
 fn benchJsonz(input: []const u8, repeats: usize) !u64 {
-    var warmup = try jsonz.parse(input, .{});
+    var warmup = try jsonz.dom.parse(input, .{});
     warmup.deinit();
 
     var elapsed: u64 = 0;
     for (0..repeats) |_| {
         const start = nowNs();
-        var parsed = try jsonz.parse(input, .{});
+        var parsed = try jsonz.dom.parse(input, .{});
         const end = nowNs();
         std.mem.doNotOptimizeAway(parsed.root());
         parsed.deinit();
@@ -254,19 +254,17 @@ fn typedType(name: []const u8) TypedType {
 }
 
 fn benchTypedJsonz(comptime T: type, input: []const u8, repeats: usize) !u64 {
-    var warmup_arena = std.heap.ArenaAllocator.init(allocator);
-    const warmup = try jsonz.fromSlice(T, warmup_arena.allocator(), input, .{ .ignore_unknown_fields = true });
-    std.mem.doNotOptimizeAway(warmup);
-    warmup_arena.deinit();
+    var warmup = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
+    std.mem.doNotOptimizeAway(warmup.value);
+    warmup.deinit();
 
     var elapsed: u64 = 0;
     for (0..repeats) |_| {
-        var arena = std.heap.ArenaAllocator.init(allocator);
         const start = nowNs();
-        const value = try jsonz.fromSlice(T, arena.allocator(), input, .{ .ignore_unknown_fields = true });
+        var parsed = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
         const end = nowNs();
-        std.mem.doNotOptimizeAway(value);
-        arena.deinit();
+        std.mem.doNotOptimizeAway(parsed.value);
+        parsed.deinit();
         elapsed += @max(end - start, 1);
     }
     return elapsed;

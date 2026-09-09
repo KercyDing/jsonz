@@ -9,6 +9,10 @@ typedef struct yyjson_val yyjson_val;
 
 yyjson_doc *jsonz_yyjson_read(char *input, size_t len, bool comments, bool trailing,
                               int *error_code);
+yyjson_doc *jsonz_yyjson_read_into(char *input, size_t len, bool comments,
+                                   bool trailing, void *buffer,
+                                   size_t buffer_len, int *error_code);
+size_t jsonz_yyjson_read_buffer_size(size_t len, bool comments, bool trailing);
 void jsonz_yyjson_free(yyjson_doc *doc);
 yyjson_val *jsonz_yyjson_root(yyjson_doc *doc);
 int jsonz_yyjson_kind(const yyjson_val *val);
@@ -20,6 +24,8 @@ const char *jsonz_yyjson_str(const yyjson_val *val);
 size_t jsonz_yyjson_len(const yyjson_val *val);
 size_t jsonz_yyjson_size(const yyjson_val *val);
 yyjson_val *jsonz_yyjson_index(const yyjson_val *val, size_t index);
+yyjson_val *jsonz_yyjson_object_get(const yyjson_val *val, const char *key,
+                                    size_t key_len);
 yyjson_val *jsonz_yyjson_object_value(const yyjson_val *val, size_t index);
 const char *jsonz_yyjson_object_key(const yyjson_val *val, size_t index);
 size_t jsonz_yyjson_object_key_len(const yyjson_val *val, size_t index);

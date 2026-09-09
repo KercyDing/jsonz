@@ -46,6 +46,19 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
+For JSON without a known schema, use `parse`. The document owns the yyjson
+storage; values and strings borrow it until `deinit`:
+
+```zig
+const input = "{\"name\":\"jsonz\"}";
+var document = try jsonz.parse(input, .{});
+defer document.deinit();
+
+const root = document.root();
+const name = root.object().?.get("name").?.string().?;
+const output = try jsonz.toSliceValue(allocator, root, .{});
+```
+
 ### Choose an API
 
 | API | Use it when | Notes |
@@ -53,8 +66,10 @@ pub fn main(init: std.process.Init) !void {
 | `fromSlice` | You want to decode JSON normally | Strings are copied using the allocator. |
 | `fromSliceBorrowed` | You want to avoid copying simple strings | Keep the input JSON alive while using the result. |
 | `fromSliceInto` | You already have a fixed-size buffer | Fails if the buffer is too small. |
-| `parse` | You want one owned result that is easy to release | Returns a parsed value; call `.deinit()` when done. |
+| `fromSliceOwned` | You want one owned typed result | Returns `Parsed(T)`; call `.deinit()` when done. |
+| `parse` | You do not know the JSON schema | Returns a DOM `Document`; call `.deinit()` when done. |
 | `toSlice` | You want serialized JSON as `[]u8` | The returned bytes belong to the allocator. |
+| `toSliceValue` | You want to serialize a DOM value | The returned bytes belong to the allocator. |
 | `toWriter` | You want to write JSON directly to a writer | Does not create an output slice. |
 
 All decode functions take `options`; use `.{}` for the defaults. Common decode options are `.ignore_unknown_fields = true` to skip extra JSON fields and `.max_depth = 256` to limit nesting.

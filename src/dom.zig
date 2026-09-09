@@ -27,7 +27,7 @@ pub const Document = struct {
     handle: *bridge.yyjson_doc,
 
     pub fn root(self: *const Document) Value {
-        return .{ .handle = bridge.jsonz_yyjson_root(self.handle) };
+        return .{ .handle = bridge.jsonz_yyjson_root(self.handle) orelse unreachable };
     }
 
     pub fn deinit(self: *Document) void {
@@ -152,4 +152,50 @@ pub fn toSliceValue(allocator: std.mem.Allocator, value: Value, options: WriteOp
     const raw = bridge.jsonz_yyjson_write(value.handle, options.pretty, &n) orelse return error.InvalidValue;
     defer std.c.free(raw);
     return allocator.dupe(u8, raw[0..n]);
+}
+
+test "parses nested values" {
+    var document = try parse(
+        "{\"enabled\":true,\"count\":42,\"items\":[null,\"jsonz\",-7,1.5]}",
+        .{},
+    );
+    defer document.deinit();
+
+    const root = document.root();
+    const object = root.object().?;
+    try std.testing.expectEqual(Kind.object, root.kind());
+    try std.testing.expect(object.get("enabled").?.boolean().?);
+    try std.testing.expectEqual(@as(u64, 42), object.get("count").?.uint().?);
+
+    const items = object.get("items").?.array().?;
+    try std.testing.expect(items.get(0).?.isNull());
+    try std.testing.expectEqualStrings("jsonz", items.get(1).?.string().?);
+    try std.testing.expectEqual(@as(i64, -7), items.get(2).?.sint().?);
+    try std.testing.expectEqual(@as(f64, 1.5), items.get(3).?.float().?);
+}
+
+test "iterates containers" {
+    var document = try parse("{\"a\":1,\"b\":2}", .{});
+    defer document.deinit();
+
+    var iterator = document.root().object().?.iterator();
+    var count: usize = 0;
+    while (iterator.next()) |entry| {
+        try std.testing.expect(entry.value.kind() == .uint);
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "writes parsed value" {
+    var document = try parse("{\"name\":\"jsonz\",\"values\":[1,2]}", .{});
+    defer document.deinit();
+
+    const output = try toSliceValue(std.testing.allocator, document.root(), .{});
+    defer std.testing.allocator.free(output);
+    try std.testing.expectEqualStrings("{\"name\":\"jsonz\",\"values\":[1,2]}", output);
+}
+
+test "rejects invalid input" {
+    try std.testing.expectError(error.InvalidJson, parse("{", .{}));
 }

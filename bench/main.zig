@@ -98,7 +98,8 @@ const GithubEvent = struct {
 };
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    var args = std.process.Args.Iterator.init(init.args);
+    var args = try std.process.Args.Iterator.initAllocator(init.args, allocator);
+    defer args.deinit();
     _ = args.skip();
 
     const mode_arg = args.next() orelse "dynamic";

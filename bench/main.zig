@@ -97,45 +97,6 @@ const GithubEvent = struct {
     id: []const u8,
 };
 
-const Number = union(enum) {
-    integer: i64,
-    unsigned: u64,
-    real: f64,
-    raw: []const u8,
-};
-
-const Field = struct {
-    key: []const u8,
-    value: Value,
-};
-
-const Value = union(enum) {
-    null,
-    bool: bool,
-    number: Number,
-    string: []const u8,
-    array: []Value,
-    object: []Field,
-
-    pub fn jsonzDeserialize(
-        comptime _: type,
-        value_allocator: std.mem.Allocator,
-        deserializer: anytype,
-    ) jsonz.DeserializeError!Value {
-        return readValue(value_allocator, deserializer);
-    }
-};
-
-const JsonzResult = struct {
-    value: Value,
-    arena: std.heap.ArenaAllocator,
-
-    fn deinit(self: *@This()) void {
-        self.arena.deinit();
-        self.* = undefined;
-    }
-};
-
 pub fn main(init: std.process.Init.Minimal) !void {
     var args = std.process.Args.Iterator.init(init.args);
     _ = args.skip();
@@ -234,15 +195,15 @@ fn repeatCount(size: usize) usize {
 }
 
 fn benchJsonz(input: []const u8, repeats: usize) !u64 {
-    var warmup = try parseJsonz(input);
+    var warmup = try jsonz.parse(input, .{});
     warmup.deinit();
 
     var elapsed: u64 = 0;
     for (0..repeats) |_| {
         const start = nowNs();
-        var parsed = try parseJsonz(input);
+        var parsed = try jsonz.parse(input, .{});
         const end = nowNs();
-        std.mem.doNotOptimizeAway(parsed.value);
+        std.mem.doNotOptimizeAway(parsed.root());
         parsed.deinit();
         elapsed += @max(end - start, 1);
     }
@@ -328,83 +289,6 @@ fn benchTypedStd(comptime T: type, input: []const u8, repeats: usize) !u64 {
         elapsed += @max(end - start, 1);
     }
     return elapsed;
-}
-
-fn parseJsonz(input: []const u8) !JsonzResult {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    const value = try jsonz.fromSlice(Value, arena.allocator(), input, .{});
-    return .{ .value = value, .arena = arena };
-}
-
-fn readValue(value_allocator: std.mem.Allocator, deserializer: anytype) jsonz.DeserializeError!Value {
-    const token = try deserializer.cursor.next();
-    return switch (token) {
-        .null_lit => .null,
-        .true_lit => .{ .bool = true },
-        .false_lit => .{ .bool = false },
-        .number => |raw| .{ .number = readNumber(raw) },
-        .string => |raw| .{ .string = try deserializer.materializeString(raw) },
-        .array_begin => try readArray(value_allocator, deserializer),
-        .object_begin => try readObject(value_allocator, deserializer),
-        else => error.WrongType,
-    };
-}
-
-fn readArray(value_allocator: std.mem.Allocator, deserializer: anytype) jsonz.DeserializeError!Value {
-    var values: std.ArrayList(Value) = .empty;
-    errdefer values.deinit(value_allocator);
-
-    if (try deserializer.cursor.isContainerEmpty(']')) {
-        _ = try deserializer.cursor.next();
-        return .{ .array = values.toOwnedSlice(value_allocator) catch return error.OutOfMemory };
-    }
-
-    while (true) {
-        values.append(value_allocator, try readValue(value_allocator, deserializer)) catch return error.OutOfMemory;
-        if (try deserializer.cursor.finishContainer(']') == .end) break;
-    }
-    return .{ .array = values.toOwnedSlice(value_allocator) catch return error.OutOfMemory };
-}
-
-fn readObject(value_allocator: std.mem.Allocator, deserializer: anytype) jsonz.DeserializeError!Value {
-    var fields: std.ArrayList(Field) = .empty;
-    errdefer fields.deinit(value_allocator);
-
-    if (try deserializer.cursor.isContainerEmpty('}')) {
-        _ = try deserializer.cursor.next();
-        return .{ .object = fields.toOwnedSlice(value_allocator) catch return error.OutOfMemory };
-    }
-
-    while (true) {
-        const key = try deserializer.deserializeString();
-        try deserializer.cursor.expectColon();
-        fields.append(value_allocator, .{
-            .key = key,
-            .value = try readValue(value_allocator, deserializer),
-        }) catch return error.OutOfMemory;
-        if (try deserializer.cursor.finishContainer('}') == .end) break;
-    }
-    return .{ .object = fields.toOwnedSlice(value_allocator) catch return error.OutOfMemory };
-}
-
-fn readNumber(raw: []const u8) Number {
-    var fractional = false;
-    for (raw) |byte| {
-        if (byte == '.' or byte == 'e' or byte == 'E') {
-            fractional = true;
-            break;
-        }
-    }
-
-    if (!fractional) {
-        if (std.fmt.parseInt(i64, raw, 10)) |value| return .{ .integer = value } else |_| {}
-        if (std.fmt.parseInt(u64, raw, 10)) |value| return .{ .unsigned = value } else |_| {}
-    } else if (std.fmt.parseFloat(f64, raw)) |value| {
-        if (std.math.isFinite(value)) return .{ .real = value };
-    } else |_| {}
-
-    return .{ .raw = raw };
 }
 
 fn nowNs() u64 {

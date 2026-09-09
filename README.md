@@ -6,7 +6,13 @@ The typed API is native Zig; the unknown-schema DOM API is a thin wrapper around
 
 ## Usage
 
-Add the dependency:
+Add the stable `0.1.0` release:
+
+```sh
+zig fetch --save git+https://github.com/KercyDing/jsonz#v0.1.0
+```
+
+To track the latest changes, use the `main` branch:
 
 ```sh
 zig fetch --save git+https://github.com/KercyDing/jsonz#main

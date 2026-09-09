@@ -63,12 +63,100 @@ pub const Serializer = struct {
 
 /// Serializes a Zig value to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(allocator: std.mem.Allocator, value: anytype, options: Options) ![]u8 {
-    var output: std.Io.Writer.Allocating = .init(allocator);
+    const capacity = @min(estimateSerializedSize(@TypeOf(value), value), 64 * 1024 * 1024);
+    var output = try std.Io.Writer.Allocating.initCapacity(allocator, capacity);
     errdefer output.deinit();
 
     var serializer = Serializer.init(&output.writer, options);
     try serializer.serialize(value);
     return output.toOwnedSlice();
+}
+
+/// Estimates compact JSON output size without scanning string contents.
+///
+/// String escapes can make the actual output larger, in which case the writer
+/// grows normally. The estimate is only a capacity hint for `toSlice`.
+fn estimateSerializedSize(comptime T: type, value: T) usize {
+    if (comptime kind.hasCustomSerialize(T)) return 0;
+
+    return switch (comptime kind.typeKind(T)) {
+        .bool => 5,
+        .int => maxIntDigits(T),
+        .float => maxFloatDigits(T),
+        .string => value.len +| 2,
+        .void => 4,
+        .optional => if (value) |payload|
+            estimateSerializedSize(kind.Child(T), payload)
+        else
+            4,
+        .array, .slice => estimateSequenceSize(T, value),
+        .tuple => estimateTupleSize(T, value),
+        .@"struct" => estimateStructSize(T, value),
+        .@"enum" => @tagName(value).len + 2,
+        .@"union" => estimateUnionSize(T, value),
+    };
+}
+
+fn maxIntDigits(comptime T: type) usize {
+    const type_info = @typeInfo(T);
+    if (type_info == .comptime_int) return 40;
+
+    const info = type_info.int;
+    const bits: usize = info.bits;
+    const digits = (bits * 30103 + 99_999) / 100_000;
+    return digits + @intFromBool(info.signedness == .signed);
+}
+
+fn maxFloatDigits(comptime T: type) usize {
+    const type_info = @typeInfo(T);
+    if (type_info == .comptime_float) return 48;
+
+    return switch (type_info.float.bits) {
+        16 => 16,
+        32 => 24,
+        64 => 32,
+        128 => 48,
+        else => 64,
+    };
+}
+
+fn estimateSequenceSize(comptime T: type, value: T) usize {
+    var size: usize = 2;
+    for (value, 0..) |element, index| {
+        size +|= @intFromBool(index != 0);
+        size +|= estimateSerializedSize(kind.Child(T), element);
+    }
+    return size;
+}
+
+fn estimateTupleSize(comptime T: type, value: T) usize {
+    var size: usize = 2;
+    inline for (comptime kind.structFields(T), 0..) |field, index| {
+        size +|= @intFromBool(index != 0);
+        size +|= estimateSerializedSize(field.type, @field(value, field.name));
+    }
+    return size;
+}
+
+fn estimateStructSize(comptime T: type, value: T) usize {
+    var size: usize = 2;
+    inline for (comptime kind.structFields(T), 0..) |field, index| {
+        size +|= fieldPrefix(field.name, index == 0).len;
+        size +|= estimateSerializedSize(field.type, @field(value, field.name));
+    }
+    return size;
+}
+
+fn estimateUnionSize(comptime T: type, value: T) usize {
+    const info = @typeInfo(T).@"union";
+    const tag = std.meta.activeTag(value);
+    inline for (comptime kind.unionFields(T)) |field| {
+        if (tag == @field(info.tag_type.?, field.name)) {
+            if (field.type == void) return field.name.len + 2;
+            return 2 +| fieldPrefix(field.name, true).len +| estimateSerializedSize(field.type, @field(value, field.name));
+        }
+    }
+    unreachable;
 }
 
 /// Write a JSON string directly, scanning ordinary text in 8-byte blocks.
@@ -213,6 +301,10 @@ fn serializeUnion(comptime T: type, value: T, serializer: *Serializer) std.Io.Wr
 }
 
 inline fn writeFieldPrefix(comptime name: []const u8, comptime first: bool, serializer: *Serializer) std.Io.Writer.Error!void {
+    if (!serializer.options.pretty and comptime !fieldNameNeedsEscaping(name)) {
+        return serializer.writer.writeAll(comptime fieldPrefix(name, first));
+    }
+
     if (!first) try serializer.writer.writeByte(',');
     try serializer.newline();
 
@@ -226,6 +318,10 @@ inline fn writeFieldPrefix(comptime name: []const u8, comptime first: bool, seri
 
     try serializer.writer.writeByte(':');
     if (serializer.options.pretty) try serializer.writer.writeByte(' ');
+}
+
+inline fn fieldPrefix(comptime name: []const u8, comptime first: bool) []const u8 {
+    return if (first) "\"" ++ name ++ "\":" else ",\"" ++ name ++ "\":";
 }
 
 fn fieldNameNeedsEscaping(comptime name: []const u8) bool {

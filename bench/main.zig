@@ -18,6 +18,7 @@ const datasets = [_][]const u8{
 };
 
 const typed_datasets = [_][]const u8{
+    "small.json",
     "canada.json",
     "github_events.json",
     "poet.json",
@@ -95,6 +96,14 @@ const Poem = struct {
     id: []const u8,
 };
 
+const SmallDocument = struct {
+    id: u64,
+    ok: bool,
+    name: []const u8,
+    score: f64,
+    tags: []const []const u8,
+};
+
 const GithubActor = struct {
     gravatar_id: []const u8,
     login: []const u8,
@@ -147,7 +156,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     if (selected_file) |file| {
-        if (!isDataset(file) or (mode == .typed and !isTypedDataset(file))) return error.InvalidArguments;
+        if (mode == .dynamic and !isDataset(file)) return error.InvalidArguments;
+        if (mode == .typed and !isTypedDataset(file)) return error.InvalidArguments;
     }
 
     std.debug.print("jsonz benchmark ({s})\n", .{@tagName(@import("builtin").mode)});
@@ -158,8 +168,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var std_decode_geomean = GeometricMean{};
     var std_encode_geomean = GeometricMean{};
 
-    for (datasets) |name| {
-        if (mode == .typed and !isTypedDataset(name)) continue;
+    const active_datasets = if (mode == .dynamic) datasets[0..] else typed_datasets[0..];
+    for (active_datasets) |name| {
         if (selected_file) |file| if (!std.mem.eql(u8, file, name)) continue;
 
         var path_buffer: [64]u8 = undefined;
@@ -246,6 +256,11 @@ fn isTypedDataset(name: []const u8) bool {
 }
 
 fn repeatCount(size: usize) usize {
+    // Tiny inputs model workloads that serialize many small JSON documents.
+    // Keep this high enough to smooth scheduler noise without dominating a
+    // normal full-suite run.
+    if (size <= 256) return 100_000;
+
     if (size >= 32 * 1024 * 1024) return 1;
     if (size >= 4 * 1024 * 1024) return 2;
     return 32;
@@ -321,6 +336,7 @@ fn benchStdEncode(input: []const u8, repeats: usize) !Timing {
 
 fn benchJsonzTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
     return switch (typedType(name)) {
+        .small => benchTypedJsonz(SmallDocument, input, repeats),
         .canada => benchTypedJsonz(CanadaDocument, input, repeats),
         .github_events => benchTypedJsonz([]const GithubEvent, input, repeats),
         .poet => benchTypedJsonz([]const Poem, input, repeats),
@@ -330,6 +346,7 @@ fn benchJsonzTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
 
 fn benchStdTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
     return switch (typedType(name)) {
+        .small => benchTypedStd(SmallDocument, input, repeats),
         .canada => benchTypedStd(CanadaDocument, input, repeats),
         .github_events => benchTypedStd([]const GithubEvent, input, repeats),
         .poet => benchTypedStd([]const Poem, input, repeats),
@@ -339,6 +356,7 @@ fn benchStdTyped(name: []const u8, input: []const u8, repeats: usize) !u64 {
 
 fn benchJsonzTypedEncode(name: []const u8, input: []const u8, repeats: usize) !Timing {
     return switch (typedType(name)) {
+        .small => benchTypedJsonzEncode(SmallDocument, input, repeats),
         .canada => benchTypedJsonzEncode(CanadaDocument, input, repeats),
         .github_events => benchTypedJsonzEncode([]const GithubEvent, input, repeats),
         .poet => benchTypedJsonzEncode([]const Poem, input, repeats),
@@ -348,6 +366,7 @@ fn benchJsonzTypedEncode(name: []const u8, input: []const u8, repeats: usize) !T
 
 fn benchStdTypedEncode(name: []const u8, input: []const u8, repeats: usize) !Timing {
     return switch (typedType(name)) {
+        .small => benchTypedStdEncode(SmallDocument, input, repeats),
         .canada => benchTypedStdEncode(CanadaDocument, input, repeats),
         .github_events => benchTypedStdEncode([]const GithubEvent, input, repeats),
         .poet => benchTypedStdEncode([]const Poem, input, repeats),
@@ -355,9 +374,10 @@ fn benchStdTypedEncode(name: []const u8, input: []const u8, repeats: usize) !Tim
     };
 }
 
-const TypedType = enum { canada, github_events, poet, twitter };
+const TypedType = enum { small, canada, github_events, poet, twitter };
 
 fn typedType(name: []const u8) TypedType {
+    if (std.mem.eql(u8, name, "small.json")) return .small;
     if (std.mem.eql(u8, name, "canada.json")) return .canada;
     if (std.mem.eql(u8, name, "github_events.json")) return .github_events;
     if (std.mem.eql(u8, name, "poet.json")) return .poet;
@@ -365,6 +385,8 @@ fn typedType(name: []const u8) TypedType {
 }
 
 fn benchTypedJsonz(comptime T: type, input: []const u8, repeats: usize) !u64 {
+    if (comptime T == SmallDocument) return benchTypedJsonzBatched(T, input, repeats);
+
     var warmup = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
     std.mem.doNotOptimizeAway(warmup.value);
     warmup.deinit();
@@ -381,7 +403,30 @@ fn benchTypedJsonz(comptime T: type, input: []const u8, repeats: usize) !u64 {
     return elapsed;
 }
 
+fn benchTypedJsonzBatched(comptime T: type, input: []const u8, repeats: usize) !u64 {
+    const batch_size = 256;
+    var elapsed: u64 = 0;
+    var offset: usize = 0;
+    while (offset < repeats) {
+        const count = @min(batch_size, repeats - offset);
+        var parsed_values: [batch_size]jsonz.typed.Parsed(T) = undefined;
+
+        const start = nowNs();
+        for (parsed_values[0..count]) |*parsed| {
+            parsed.* = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
+            std.mem.doNotOptimizeAway(parsed.value);
+        }
+        elapsed += @max(nowNs() - start, 1);
+
+        for (parsed_values[0..count]) |*parsed| parsed.deinit();
+        offset += count;
+    }
+    return elapsed;
+}
+
 fn benchTypedStd(comptime T: type, input: []const u8, repeats: usize) !u64 {
+    if (comptime T == SmallDocument) return benchTypedStdBatched(T, input, repeats);
+
     var warmup_arena = std.heap.ArenaAllocator.init(allocator);
     const warmup = try std.json.parseFromSliceLeaky(T, warmup_arena.allocator(), input, .{ .ignore_unknown_fields = true });
     std.mem.doNotOptimizeAway(warmup);
@@ -400,7 +445,32 @@ fn benchTypedStd(comptime T: type, input: []const u8, repeats: usize) !u64 {
     return elapsed;
 }
 
+fn benchTypedStdBatched(comptime T: type, input: []const u8, repeats: usize) !u64 {
+    const batch_size = 256;
+    var elapsed: u64 = 0;
+    var offset: usize = 0;
+    while (offset < repeats) {
+        const count = @min(batch_size, repeats - offset);
+        var arenas: [batch_size]std.heap.ArenaAllocator = undefined;
+        var values: [batch_size]T = undefined;
+
+        const start = nowNs();
+        for (arenas[0..count], values[0..count]) |*arena, *value| {
+            arena.* = .init(allocator);
+            value.* = try std.json.parseFromSliceLeaky(T, arena.allocator(), input, .{ .ignore_unknown_fields = true });
+            std.mem.doNotOptimizeAway(value.*);
+        }
+        elapsed += @max(nowNs() - start, 1);
+
+        for (arenas[0..count]) |*arena| arena.deinit();
+        offset += count;
+    }
+    return elapsed;
+}
+
 fn benchTypedJsonzEncode(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    if (comptime T == SmallDocument) return benchTypedJsonzEncodeBatched(T, input, repeats);
+
     var fixture = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
     defer fixture.deinit();
     const warmup = try jsonz.typed.toSlice(allocator, fixture.value, .{});
@@ -418,7 +488,35 @@ fn benchTypedJsonzEncode(comptime T: type, input: []const u8, repeats: usize) !T
     return .{ .elapsed = elapsed, .output_bytes = warmup.len };
 }
 
+fn benchTypedJsonzEncodeBatched(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    var fixture = try jsonz.typed.parse(T, allocator, input, .{ .ignore_unknown_fields = true });
+    defer fixture.deinit();
+    const warmup = try jsonz.typed.toSlice(allocator, fixture.value, .{});
+    defer allocator.free(warmup);
+
+    const batch_size = 256;
+    var elapsed: u64 = 0;
+    var offset: usize = 0;
+    while (offset < repeats) {
+        const count = @min(batch_size, repeats - offset);
+        var outputs: [batch_size][]u8 = undefined;
+
+        const start = nowNs();
+        for (outputs[0..count]) |*output| {
+            output.* = try jsonz.typed.toSlice(allocator, fixture.value, .{});
+            std.mem.doNotOptimizeAway(output.ptr);
+        }
+        elapsed += @max(nowNs() - start, 1);
+
+        for (outputs[0..count]) |output| allocator.free(output);
+        offset += count;
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
 fn benchTypedStdEncode(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    if (comptime T == SmallDocument) return benchTypedStdEncodeBatched(T, input, repeats);
+
     var fixture_arena = std.heap.ArenaAllocator.init(allocator);
     defer fixture_arena.deinit();
     const fixture = try std.json.parseFromSliceLeaky(T, fixture_arena.allocator(), input, .{ .ignore_unknown_fields = true });
@@ -437,6 +535,33 @@ fn benchTypedStdEncode(comptime T: type, input: []const u8, repeats: usize) !Tim
     return .{ .elapsed = elapsed, .output_bytes = warmup.len };
 }
 
+fn benchTypedStdEncodeBatched(comptime T: type, input: []const u8, repeats: usize) !Timing {
+    var fixture_arena = std.heap.ArenaAllocator.init(allocator);
+    defer fixture_arena.deinit();
+    const fixture = try std.json.parseFromSliceLeaky(T, fixture_arena.allocator(), input, .{ .ignore_unknown_fields = true });
+    const warmup = try std.json.Stringify.valueAlloc(allocator, fixture, .{});
+    defer allocator.free(warmup);
+
+    const batch_size = 256;
+    var elapsed: u64 = 0;
+    var offset: usize = 0;
+    while (offset < repeats) {
+        const count = @min(batch_size, repeats - offset);
+        var outputs: [batch_size][]u8 = undefined;
+
+        const start = nowNs();
+        for (outputs[0..count]) |*output| {
+            output.* = try std.json.Stringify.valueAlloc(allocator, fixture, .{});
+            std.mem.doNotOptimizeAway(output.ptr);
+        }
+        elapsed += @max(nowNs() - start, 1);
+
+        for (outputs[0..count]) |output| allocator.free(output);
+        offset += count;
+    }
+    return .{ .elapsed = elapsed, .output_bytes = warmup.len };
+}
+
 fn nowNs() u64 {
     if (comptime @hasDecl(std.time, "nanoTimestamp")) {
         return @intCast(std.time.nanoTimestamp());
@@ -448,14 +573,22 @@ fn printResult(name: []const u8, elapsed: u64, bytes: usize, repeats: usize) voi
     const seconds = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_s;
     const total_bytes: f64 = @floatFromInt(bytes * repeats);
     const mebibytes_per_second = total_bytes / seconds / (1024 * 1024);
-    const milliseconds = @as(f64, @floatFromInt(elapsed)) /
+    const nanoseconds = @as(f64, @floatFromInt(elapsed)) /
         @as(f64, @floatFromInt(repeats)) /
-        std.time.ns_per_ms;
-    std.debug.print("  {s}: {d:.3} ms/op, {d:.2} MiB/s\n", .{
-        name,
-        milliseconds,
-        mebibytes_per_second,
-    });
+        1.0;
+    if (nanoseconds < 1_000) {
+        std.debug.print("  {s}: {d:.1} ns/op, {d:.2} MiB/s\n", .{
+            name,
+            nanoseconds,
+            mebibytes_per_second,
+        });
+    } else {
+        std.debug.print("  {s}: {d:.3} ms/op, {d:.2} MiB/s\n", .{
+            name,
+            nanoseconds / std.time.ns_per_ms,
+            mebibytes_per_second,
+        });
+    }
 }
 
 fn printGeometricMean(name: []const u8, operation: []const u8, geomean: GeometricMean) void {

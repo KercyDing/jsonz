@@ -12,21 +12,25 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .strip = strip,
     });
-
-    const test_step = b.step("test", "Run tests");
-    const test_data_mod = b.createModule(.{
-        .root_source_file = b.path("tests/test_data.zig"),
+    const yyjson_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/yyjson/yyjson_bridge.h"),
         .target = target,
         .optimize = optimize,
-        .strip = strip,
     });
+    yyjson_c.addIncludePath(b.path("src/yyjson"));
+    jsonz_mod.addImport("yyjson_c", yyjson_c.createModule());
+    jsonz_mod.addCSourceFile(.{ .file = b.path("src/yyjson/yyjson.c"), .flags = &.{"-std=c99"} });
+    jsonz_mod.addCSourceFile(.{ .file = b.path("src/yyjson/yyjson_bridge.c"), .flags = &.{"-std=c99"} });
+    jsonz_mod.link_libc = true;
 
+    const test_step = b.step("test", "Run tests");
     const tests_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
     });
+    tests_mod.addImport("yyjson_c", yyjson_c.createModule());
 
     const tests = b.addTest(.{
         .root_module = tests_mod,
@@ -42,9 +46,9 @@ pub fn build(b: *std.Build) void {
         .strip = strip,
         .imports = &.{
             .{ .name = "jsonz", .module = jsonz_mod },
-            .{ .name = "test_data", .module = test_data_mod },
         },
     });
+    roundtrip_test_mod.addImport("yyjson_c", yyjson_c.createModule());
     const roundtrip_tests = b.addTest(.{ .root_module = roundtrip_test_mod });
     const run_roundtrip_tests = b.addRunArtifact(roundtrip_tests);
     test_step.dependOn(&run_roundtrip_tests.step);
@@ -56,6 +60,7 @@ pub fn build(b: *std.Build) void {
         .strip = strip,
         .imports = &.{.{ .name = "jsonz", .module = jsonz_mod }},
     });
+    fuzzy_test_mod.addImport("yyjson_c", yyjson_c.createModule());
     const fuzzy_tests = b.addTest(.{ .root_module = fuzzy_test_mod });
     const run_fuzzy_tests = b.addRunArtifact(fuzzy_tests);
     test_step.dependOn(&run_fuzzy_tests.step);
@@ -72,6 +77,11 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
         .strip = false,
     });
+    bench_jsonz_mod.addImport("yyjson_c", yyjson_c.createModule());
+    bench_jsonz_mod.addIncludePath(b.path("src/yyjson"));
+    bench_jsonz_mod.addCSourceFile(.{ .file = b.path("src/yyjson/yyjson.c"), .flags = &.{"-std=c99"} });
+    bench_jsonz_mod.addCSourceFile(.{ .file = b.path("src/yyjson/yyjson_bridge.c"), .flags = &.{"-std=c99"} });
+    bench_jsonz_mod.link_libc = true;
     const bench_mod = b.createModule(.{
         .root_source_file = b.path("bench/main.zig"),
         .target = target,

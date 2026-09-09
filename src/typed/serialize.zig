@@ -36,7 +36,7 @@ pub const Serializer = struct {
     }
 
     pub fn serializeString(self: *Serializer, value: []const u8) std.Io.Writer.Error!void {
-        try std.json.Stringify.encodeJsonString(value, .{}, self.writer);
+        try writeJsonString(self.writer, value);
     }
 
     pub fn serializeNull(self: *Serializer) std.Io.Writer.Error!void {
@@ -57,6 +57,54 @@ pub fn toSlice(allocator: std.mem.Allocator, value: anytype, options: Options) !
     var serializer = Serializer.init(&output.writer, options);
     try serializer.serialize(value);
     return output.toOwnedSlice();
+}
+
+/// Write a JSON string directly, scanning ordinary text in 8-byte blocks.
+/// This keeps the common no-escape path to one bulk writer call.
+fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Error!void {
+    try writer.writeByte('"');
+
+    var start: usize = 0;
+    var index: usize = 0;
+    while (index < value.len) : (index += 1) {
+        while (index + 8 <= value.len) {
+            const bytes: @Vector(8, u8) = value[index..][0..8].*;
+            const special =
+                (bytes == @as(@Vector(8, u8), @splat('"'))) |
+                (bytes == @as(@Vector(8, u8), @splat('\\'))) |
+                (bytes < @as(@Vector(8, u8), @splat(0x20)));
+            if (@reduce(.Or, special)) break;
+            index += 8;
+        }
+        if (index == value.len) break;
+
+        const byte = value[index];
+        const escape: ?[]const u8 = switch (byte) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            0x08 => "\\b",
+            0x0c => "\\f",
+            0x00...0x07, 0x0b, 0x0e...0x1f => null,
+            else => continue,
+        };
+
+        if (index > start) try writer.writeAll(value[start..index]);
+        if (escape) |text| {
+            try writer.writeAll(text);
+        } else {
+            const hex = "0123456789abcdef";
+            try writer.writeAll("\\u00");
+            try writer.writeByte(hex[byte >> 4]);
+            try writer.writeByte(hex[byte & 0x0f]);
+        }
+        start = index + 1;
+    }
+
+    if (start < value.len) try writer.writeAll(value[start..]);
+    try writer.writeByte('"');
 }
 
 pub fn toWriter(writer: *std.Io.Writer, value: anytype, options: Options) !void {

@@ -1,15 +1,15 @@
 # jsonz
 
-A tiny, high-performance JSON serde library for Zig.
+A tiny, high-performance JSON library for Zig.
 
 The typed API is native Zig; the unknown-schema DOM API is a thin wrapper around [yyjson](https://github.com/ibireme/yyjson).
 
 ## Usage
 
-Add the stable `0.1.0` release:
+Add the stable `0.2.0` release:
 
 ```sh
-zig fetch --save git+https://github.com/KercyDing/jsonz#v0.1.0
+zig fetch --save git+https://github.com/KercyDing/jsonz#v0.2.0
 ```
 
 To track the latest changes, use the `main` branch:
@@ -71,8 +71,8 @@ const output = try document.toSlice(allocator, .{});
 | API | Use it when | Notes |
 | --- | --- | --- |
 | `typed.parse` | You want an owning typed result | Returns `Parsed(T)`; call `.deinit()` when done. |
-| `typed.parseBorrowed` | You want strings to borrow the input | Keep the input and allocator-owned data alive. |
-| `typed.parseInto` | You provide storage for allocations | Fails if the buffer is too small. |
+| `typed.parseBorrowed` | You want strings to borrow the input | Borrowed strings reference the input; other storage may still use the allocator. |
+| `typed.parseInto` | You want decoding to use caller-provided storage | Fails if the buffer is too small. |
 | `typed.toSlice` | You want serialized JSON as `[]u8` | The returned bytes belong to the allocator. |
 | `typed.toWriter` | You want to write JSON directly | Does not create an output slice. |
 
@@ -80,8 +80,7 @@ const output = try document.toSlice(allocator, .{});
 
 ### DOM API
 
-Use `get` when a field or index may be absent, and `field` or `at` when its
-presence is an invariant. Type checks return `bool`; value accessors assert that the type matches:
+Use `get` for checked object-field or array-index access. `field` and `at` assert that the requested element exists. Type checks return `bool`; typed accessors assert that the value has the expected JSON type:
 
 ```zig
 if (document.get("name")) |name| {
@@ -92,6 +91,14 @@ if (document.get("name")) |name| {
 
 const first = document.field("items").array().at(0);
 ```
+
+| API | Use it when | Notes |
+| --- | --- | --- |
+| `dom.parse` | You need to inspect arbitrary JSON | Returns `Document`; call `.deinit()` when done. |
+| `dom.parseInto` | You provide DOM storage | Use `parseBufferSize` to size the buffer. |
+| `dom.parseBufferSize` | You need storage for `parseInto` | Returns the required buffer size. |
+
+Both `Document` and `Value` provide `.toSlice()` and `.toWriter()` methods.
 
 Caller-provided DOM storage is sized and used explicitly:
 
@@ -104,11 +111,16 @@ var document = try jsonz.dom.parseInto(storage, input, .{});
 defer document.deinit();
 ```
 
-All parse functions take `options`; use `.{}` for the defaults. Common typed
-options are `.ignore_unknown_fields = true` and `.max_depth = 256`.
+## Options
 
-Typed serialization supports `.pretty = true` and a configurable `.indent`.
-DOM serialization currently supports `.pretty = true`.
+Pass `.{}` to use the defaults.
+
+| Namespace | Options | Fields |
+| --- | --- | --- |
+| `typed` | `typed.ParseOptions` | `ignore_unknown_fields`, `max_depth` |
+| `typed` | `typed.SerializeOptions` | `pretty`, `indent` |
+| `dom` | `dom.ParseOptions` | `allow_comments`, `allow_trailing_commas` |
+| `dom` | `dom.WriteOptions` | `pretty` |
 
 ## Development
 
@@ -117,7 +129,7 @@ Development commands use [only](https://github.com/KercyDing/only) and [mise](ht
 ```sh
 only build             # debug build
 only test              # run tests
-only bench             # dynamic benchmarks
+only bench             # DOM benchmarks
 only bench typed       # typed benchmarks
 only release           # optimized build with symbols stripped
 ```
@@ -132,8 +144,6 @@ only z16 release
 
 ## License
 
-[MIT](LICENSE)
+jsonz is licensed under the [MIT License](LICENSE).
 
-### yyjson License
-
-[MIT](src/yyjson/LICENSE)
+The bundled yyjson source is also MIT licensed; see its [license](src/yyjson/LICENSE).

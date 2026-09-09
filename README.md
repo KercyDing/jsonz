@@ -2,6 +2,8 @@
 
 A tiny, high-performance JSON serde library for Zig.
 
+The typed API is native Zig; the unknown-schema DOM API is a thin wrapper around [yyjson](https://github.com/ibireme/yyjson).
+
 ## Usage
 
 Add the dependency:
@@ -99,3 +101,7 @@ only z16 release
 ## License
 
 [MIT](LICENSE)
+
+### yyjson License
+
+[MIT](src/yyjson/LICENSE)

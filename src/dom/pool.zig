@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// yyjson stores every immutable DOM value in this exact two-word layout.
+/// Every immutable DOM value uses this exact two-word layout.
 /// `tag` packs type, subtype, and container length; `uni` is the scalar value,
 /// string offset, or a relative value-pool offset.
 pub const Value = extern struct {
@@ -54,7 +54,7 @@ pub fn valueLen(value: Value) usize {
     return @intCast(value.tag >> tag_bits);
 }
 
-/// yyjson stores container links as byte offsets rather than pointers, so its
+/// Container links use byte offsets rather than pointers, so the
 /// reader can grow the contiguous value array with realloc.
 pub fn byteOffset(from: u32, to: u32) u64 {
     return (@as(u64, to) - @as(u64, from)) * value_size;
@@ -65,7 +65,7 @@ pub fn indexAtOffset(from: u32, offset: u64) u32 {
     return from + @as(u32, @intCast(offset / value_size));
 }
 
-/// Reader value storage with yyjson's initial capacity estimates and 1.5x
+/// Reader value storage with input-size capacity estimates and 1.5x
 /// growth factor. Values are addressed by index, so a realloc never invalidates
 /// a stored container offset.
 pub const Pool = struct {
@@ -109,19 +109,19 @@ pub const Pool = struct {
     }
 };
 
-test "value layout matches yyjson" {
+test "value layout" {
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(Value));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Value));
 }
 
-test "tag packs type subtype and length" {
+test "tag fields" {
     const value = Value{ .tag = makeTag(.number, .real, 42), .uni = 0 };
     try std.testing.expectEqual(Type.number, valueType(value));
     try std.testing.expectEqual(Subtype.real, valueSubtype(value));
     try std.testing.expectEqual(@as(usize, 42), valueLen(value));
 }
 
-test "container links use value-sized byte offsets" {
+test "container offsets" {
     const parent: u32 = 3;
     const child: u32 = 7;
     const offset = byteOffset(parent, child);
@@ -129,7 +129,7 @@ test "container links use value-sized byte offsets" {
     try std.testing.expectEqual(child, indexAtOffset(parent, offset));
 }
 
-test "pool grows by one point five" {
+test "pool growth" {
     var pool = try Pool.init(std.testing.allocator, 0, false);
     defer pool.deinit();
     _ = try pool.append(.{ .tag = makeTag(.null, .none, 0), .uni = 0 });

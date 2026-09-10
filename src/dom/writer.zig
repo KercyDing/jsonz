@@ -301,11 +301,6 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 /// yyjson's default writer escapes `"`, `\`, and the C0 control characters,
 /// using uppercase hex for `\u00XX`; every other byte, including DEL and any
 /// valid multi-byte sequence, is copied through.
-///
-/// A string that came in with an escape sequence has to be re-scanned, and on
-/// documents with long escaped text that scan is most of the writer's work, so
-/// it runs 32 bytes at a time and only falls back to a byte loop for the last
-/// partial chunk.
 inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     const offset: usize = @intCast(item.uni.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
@@ -315,10 +310,21 @@ inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) 
     buffer.put('"');
     if (pool_mod.valueSubtype(item) == pool_mod.no_escape) {
         buffer.putAll(bytes);
-        buffer.put('"');
-        return;
+    } else {
+        // Out of line: most strings need no escaping, and growing this
+        // function costs the common path more than the call costs the rare one.
+        writeEscaped(buffer, bytes);
     }
+    buffer.put('"');
+}
 
+/// Writes `bytes` between quotes, escaping what JSON requires.
+///
+/// A string that came in with an escape sequence has to be re-scanned, and on
+/// documents with long escaped text that scan is most of the writer's work, so
+/// it runs 32 bytes at a time and only falls back to a byte loop for the last
+/// partial chunk.
+fn writeEscaped(buffer: *Buffer, bytes: []const u8) void {
     // Bytes already copied through: everything before `index` that did not need
     // escaping is still pending, so the copy happens once per escape instead of
     // once per chunk.
@@ -344,7 +350,6 @@ inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) 
         start = index + 1;
     }
     buffer.putAll(bytes[start..]);
-    buffer.put('"');
 }
 
 /// Writes the escape sequence for one byte that JSON cannot carry literally.

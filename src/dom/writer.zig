@@ -39,6 +39,52 @@ inline fn escapeMask(bytes: EscapeVector) u32 {
     return @bitCast(quote | backslash | control);
 }
 
+/// Copies `len` bytes from `src` to `dest`.
+///
+/// What the writer copies is mostly short: escape sequences, integer digits,
+/// and the plain runs between escapes. Routing those through `@memcpy` costs a
+/// call and a branch chain that hands a handful of bytes to the generic path,
+/// so anything under 32 bytes is copied with overlapping fixed-size moves that
+/// stay inline.
+inline fn copyBytes(dest: [*]u8, src: [*]const u8, len: usize) void {
+    @setRuntimeSafety(false);
+    if (len >= 32) {
+        @memcpy(dest[0..len], src[0..len]);
+        return;
+    }
+    if (len >= 16) {
+        copySized(16, dest, src);
+        copySized(16, dest + len - 16, src + len - 16);
+        return;
+    }
+    if (len >= 8) {
+        copySized(8, dest, src);
+        copySized(8, dest + len - 8, src + len - 8);
+        return;
+    }
+    if (len >= 4) {
+        copySized(4, dest, src);
+        copySized(4, dest + len - 4, src + len - 4);
+        return;
+    }
+    if (len == 0) return;
+    if (len >= 2) {
+        copySized(2, dest, src);
+        copySized(2, dest + len - 2, src + len - 2);
+        return;
+    }
+    dest[0] = src[0];
+}
+
+/// Copies exactly `size` bytes, which must be a power of two.
+///
+/// Both sides are declared with an alignment of one: a writer buffer and the
+/// runs inside it are not guaranteed to be aligned.
+inline fn copySized(comptime size: usize, dest: [*]u8, src: [*]const u8) void {
+    const Bytes = [size]u8;
+    @as(*align(1) Bytes, @ptrCast(dest)).* = @as(*align(1) const Bytes, @ptrCast(src)).*;
+}
+
 /// A growable output buffer with an unchecked `reserve` + write split.
 ///
 /// Like yyjson's writer, each value reserves the most bytes it can produce and
@@ -53,12 +99,20 @@ const Buffer = struct {
         try self.list.ensureTotalCapacity(self.allocator, required);
     }
 
+    /// Appends one byte. Writing to the unused capacity directly keeps the
+    /// write a store; `appendAssumeCapacity` and `appendSliceAssumeCapacity`
+    /// are separate functions in the standard library, so routing through them
+    /// turns every byte and every short escape run into a call.
     inline fn put(self: *Buffer, byte: u8) void {
-        self.list.appendAssumeCapacity(byte);
+        const index = self.list.items.len;
+        self.list.items.len = index + 1;
+        self.list.items.ptr[index] = byte;
     }
 
     inline fn putAll(self: *Buffer, bytes: []const u8) void {
-        self.list.appendSliceAssumeCapacity(bytes);
+        const dest = self.list.unusedCapacitySlice();
+        copyBytes(dest.ptr, bytes.ptr, bytes.len);
+        self.list.items.len += bytes.len;
     }
 
     inline fn putSpaces(self: *Buffer, count: usize) void {

@@ -2,6 +2,7 @@ const document = @import("document.zig");
 const value = @import("value.zig");
 const pool = @import("pool.zig");
 const reader = @import("reader.zig");
+const writer = @import("writer.zig");
 
 /// An owned parsed DOM document.
 pub const Document = document.Document;
@@ -29,6 +30,8 @@ pub const WriteOptions = value.WriteOptions;
 
 /// Parses JSON into an owned DOM document.
 pub const parse = document.parse;
+/// Parses JSON into an owned DOM document allocated with a given allocator.
+pub const parseWith = document.parseWith;
 /// Parses JSON into caller-provided storage.
 pub const parseInto = document.parseInto;
 /// Returns the required storage size for `parseInto`.
@@ -44,4 +47,5 @@ test {
     _ = value;
     _ = pool;
     _ = reader;
+    _ = writer;
 }

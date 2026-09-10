@@ -6,24 +6,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
 
-    // yyjson
-    const yyjson_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/yyjson/yyjson_bridge.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    yyjson_c.addIncludePath(b.path("src/yyjson"));
-
-    const yyjson_mod = yyjson_c.createModule();
-    yyjson_mod.addIncludePath(b.path("src/yyjson"));
-    yyjson_mod.addCSourceFiles(.{
-        .files = &.{
-            "src/yyjson/yyjson.c",
-            "src/yyjson/yyjson_bridge.c",
-        },
-        .flags = &.{"-std=c99"},
-    });
-
     // float
     const float_mod = b.addModule("float", .{
         .root_source_file = b.path("src/float/root.zig"),
@@ -40,7 +22,6 @@ pub fn build(b: *std.Build) void {
         .strip = strip,
         .imports = &.{
             .{ .name = "float", .module = float_mod },
-            .{ .name = "yyjson_c", .module = yyjson_mod },
         },
     });
 
@@ -117,24 +98,6 @@ fn addBench(
         @panic("-Dmode must be dynamic or typed");
     }
 
-    // yyjson
-    const yyjson_c = b.addTranslateC(.{
-        .root_source_file = b.path("src/yyjson/yyjson_bridge.h"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
-    yyjson_c.addIncludePath(b.path("src/yyjson"));
-
-    const yyjson_mod = yyjson_c.createModule();
-    yyjson_mod.addIncludePath(b.path("src/yyjson"));
-    yyjson_mod.addCSourceFiles(.{
-        .files = &.{
-            "src/yyjson/yyjson.c",
-            "src/yyjson/yyjson_bridge.c",
-        },
-        .flags = &.{"-std=c99"},
-    });
-
     const float_mod = b.createModule(.{
         .root_source_file = b.path("src/float/root.zig"),
         .target = target,
@@ -147,7 +110,6 @@ fn addBench(
         .optimize = .ReleaseFast,
         .imports = &.{
             .{ .name = "float", .module = float_mod },
-            .{ .name = "yyjson_c", .module = yyjson_mod },
         },
     });
 

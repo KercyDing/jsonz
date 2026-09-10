@@ -1,6 +1,6 @@
 const std = @import("std");
 const kind = @import("kind.zig");
-const float = @import("float/root.zig");
+const float = @import("float");
 
 pub const Options = struct {
     /// Format arrays and objects with indentation and line breaks.

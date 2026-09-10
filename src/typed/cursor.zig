@@ -1,5 +1,5 @@
 const std = @import("std");
-const float = @import("float/root.zig");
+const float = @import("float");
 
 /// The next JSON syntax item returned by `Cursor.next` or `Cursor.peek`.
 ///

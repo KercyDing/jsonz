@@ -76,7 +76,7 @@ fn writeTarget(smith: *std.testing.Smith, out: *std.ArrayList(u8)) anyerror!void
 }
 
 fn writeValue(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) anyerror!void {
-    const choice = if (depth >= 3) 0 else smith.valueRangeAtMost(u8, 0, 5);
+    const choice = if (depth >= 3) 0 else smith.valueRangeAtMost(u8, 0, 6);
     switch (choice) {
         0 => try out.appendSlice(std.testing.allocator, "null"),
         1 => try out.appendSlice(std.testing.allocator, if (smith.value(bool)) "true" else "false"),
@@ -84,7 +84,41 @@ fn writeValue(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) any
         3 => try writeString(smith, out),
         4 => try writeArray(smith, out, depth),
         5 => try writeObject(smith, out, depth),
+        6 => try writeNumber(smith, out),
         else => unreachable,
+    }
+}
+
+/// Writes a random JSON number, including ones with more significant digits
+/// than a `u64` holds and exponents long enough to saturate the parser.
+fn writeNumber(smith: *std.testing.Smith, out: *std.ArrayList(u8)) anyerror!void {
+    if (smith.value(bool)) try out.append(std.testing.allocator, '-');
+
+    if (smith.value(bool)) {
+        try out.append(std.testing.allocator, '0');
+    } else {
+        const integer_digits = smith.valueRangeAtMost(u8, 1, 24);
+        try out.append(std.testing.allocator, '0' + smith.valueRangeAtMost(u8, 1, 9));
+        for (1..integer_digits) |_| {
+            try out.append(std.testing.allocator, '0' + smith.valueRangeAtMost(u8, 0, 9));
+        }
+    }
+
+    if (smith.value(bool)) {
+        try out.append(std.testing.allocator, '.');
+        const fraction_digits = smith.valueRangeAtMost(u8, 1, 24);
+        for (0..fraction_digits) |_| {
+            try out.append(std.testing.allocator, '0' + smith.valueRangeAtMost(u8, 0, 9));
+        }
+    }
+
+    if (smith.value(bool)) {
+        try out.append(std.testing.allocator, if (smith.value(bool)) 'e' else 'E');
+        if (smith.value(bool)) try out.append(std.testing.allocator, if (smith.value(bool)) '+' else '-');
+        const exponent_digits = smith.valueRangeAtMost(u8, 1, 4);
+        for (0..exponent_digits) |_| {
+            try out.append(std.testing.allocator, '0' + smith.valueRangeAtMost(u8, 0, 9));
+        }
     }
 }
 

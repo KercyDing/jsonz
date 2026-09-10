@@ -1,6 +1,7 @@
 const deserialize = @import("deserialize.zig");
 const serialize = @import("serialize.zig");
 const cursor = @import("cursor.zig");
+const float = @import("float.zig");
 const kind = @import("kind.zig");
 const pool = @import("pool.zig");
 
@@ -29,6 +30,7 @@ test {
     _ = deserialize;
     _ = serialize;
     _ = cursor;
+    _ = float;
     _ = kind;
     _ = pool;
 }

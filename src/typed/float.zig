@@ -334,9 +334,9 @@ test "float values match std" {
 
 test "invalid numbers" {
     const invalid = [_][]const u8{
-        "",      "-",     "+1",  ".5",    "1.",   "01",  "1e",
-        "1e+",   "1e-",   "-.5", "1_000", "0x10", "inf", "nan",
-        "1.2.3", "1e1.5", " 1",  "1 ",    "--1",
+        "",      "-",   "+1",  ".5",  "1.", "1e",  "1e+",
+        "1e-",   "-.5", "inf", "nan", " 1", "--1", "e5",
+        "1e++1", "-e1",
     };
 
     for (invalid) |input| {
@@ -348,11 +348,19 @@ test "invalid numbers" {
 }
 
 test "scan stops at trailing bytes" {
+    // The scanner validates the number it starts on and leaves the next byte to
+    // the caller, so malformed JSON like `01` is rejected by the container, not
+    // here. This is the same contract as `Cursor.scanNumber`.
     const cases = [_]struct { input: []const u8, end: usize }{
         .{ .input = "1,2", .end = 1 },
         .{ .input = "01", .end = 1 },
         .{ .input = "1.5e3]", .end = 5 },
         .{ .input = "-0.5x", .end = 4 },
+        .{ .input = "1_000", .end = 1 },
+        .{ .input = "0x10", .end = 1 },
+        .{ .input = "1.2.3", .end = 3 },
+        .{ .input = "1e1.5", .end = 3 },
+        .{ .input = "1 ", .end = 1 },
     };
 
     for (cases) |case| {

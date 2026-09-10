@@ -28,6 +28,13 @@ pub const Result = parse.Result;
 /// `.0`, and negative zero keeps its sign.
 pub const formatNumber = format.write;
 
+/// Like `formatNumber`, but also reports the decimal exponent of the most
+/// significant digit, which callers need to pick fixed or scientific notation.
+pub const formatNumberExponent = format.writeShortest;
+
+/// The text and decimal exponent `formatNumberExponent` returns.
+pub const Shortest = format.Shortest;
+
 /// The longest text `formatNumber` can produce for `T`, or zero when `T` has no
 /// fused formatter and the caller should fall back to `std.fmt`.
 pub const maxNumberLength = format.maxLength;

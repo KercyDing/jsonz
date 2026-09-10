@@ -38,11 +38,26 @@ pub fn maxLength(comptime T: type) usize {
     };
 }
 
+/// The shortest decimal form of a float, with the decimal exponent of its most
+/// significant digit (`0` for zero).
+pub const Shortest = struct {
+    /// Formatted text, exactly what `write` returns.
+    text: []const u8,
+    /// The value is `d.dddd × 10^exponent`.
+    exponent: i32,
+};
+
 /// Writes the shortest decimal form of `value` into `buf` and returns it.
 ///
 /// The result matches `std.fmt`'s `{d}` exactly: never an exponent, never a
 /// trailing `.0`, and negative zero keeps its sign.
 pub fn write(buf: []u8, value: anytype) Error![]const u8 {
+    return (try writeShortest(buf, value)).text;
+}
+
+/// Like `write`, but also reports the decimal exponent, which callers need to
+/// choose between fixed and scientific notation.
+pub fn writeShortest(buf: []u8, value: anytype) Error!Shortest {
     return switch (@TypeOf(value)) {
         f64 => writeF64(buf, value),
         f32 => writeF32(buf, value),
@@ -50,7 +65,7 @@ pub fn write(buf: []u8, value: anytype) Error![]const u8 {
     };
 }
 
-fn writeF64(buf: []u8, value: f64) Error![]const u8 {
+fn writeF64(buf: []u8, value: f64) Error!Shortest {
     const bits: u64 = @bitCast(value);
     const negative = bits >> 63 != 0;
     const magnitude = bits & 0x7FFF_FFFF_FFFF_FFFF;
@@ -75,7 +90,7 @@ fn writeF64(buf: []u8, value: f64) Error![]const u8 {
     return emit(buf, negative, decimal);
 }
 
-fn writeF32(buf: []u8, value: f32) Error![]const u8 {
+fn writeF32(buf: []u8, value: f32) Error!Shortest {
     const bits: u32 = @bitCast(value);
     const negative = bits >> 31 != 0;
     const magnitude = bits & 0x7FFF_FFFF;
@@ -99,16 +114,16 @@ fn writeF32(buf: []u8, value: f32) Error![]const u8 {
     return emit(buf, negative, decimal);
 }
 
-fn writeZero(buf: []u8, negative: bool) Error![]const u8 {
+fn writeZero(buf: []u8, negative: bool) Error!Shortest {
     const required: usize = if (negative) 2 else 1;
     if (buf.len < required) return error.BufferTooSmall;
     if (negative) {
         buf[0] = '-';
         buf[1] = '0';
-        return buf[0..2];
+        return .{ .text = buf[0..2], .exponent = 0 };
     }
     buf[0] = '0';
-    return buf[0..1];
+    return .{ .text = buf[0..1], .exponent = 0 };
 }
 
 /// Significant digits and their decimal exponent: the value is
@@ -313,7 +328,7 @@ inline fn roundToOdd32(significand: u64, scaled: u32) u32 {
 
 /// Renders `decimal` in the layout `std.fmt`'s decimal mode uses: plain
 /// digits, a decimal point placed by position, and no exponent.
-fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
+fn emit(buf: []u8, negative: bool, decimal: Decimal) Error!Shortest {
     // The digit selection is shortest but may leave trailing zeros: `1.0`
     // arrives as `10000000000000000e-16`. Dropping them never changes the value
     // and keeps the output as short as `{d}`'s.
@@ -344,7 +359,7 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
         buf[sign + 1] = '.';
         @memset(buf[sign + 2 ..][0..zeros], '0');
         writeDigits(buf[sign + 2 + zeros ..], significand, length);
-        return buf[0 .. sign + 2 + zeros + length];
+        return .{ .text = buf[0 .. sign + 2 + zeros + length], .exponent = point - 1 };
     }
 
     if (point >= @as(i32, @intCast(length))) {
@@ -352,7 +367,7 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
         const zeros: usize = @as(usize, @intCast(point)) - length;
         writeDigits(buf[sign..], significand, length);
         @memset(buf[sign + length ..][0..zeros], '0');
-        return buf[0 .. sign + length + zeros];
+        return .{ .text = buf[0 .. sign + length + zeros], .exponent = point - 1 };
     }
 
     // 123.456. Writing the digits one byte late leaves every digit after the
@@ -363,7 +378,7 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
     writeDigits(buf[sign + 1 ..], significand, length);
     moveBack(buf[sign..], buf[sign + 1 ..], head);
     buf[sign + head] = '.';
-    return buf[0 .. sign + length + 1];
+    return .{ .text = buf[0 .. sign + length + 1], .exponent = point - 1 };
 }
 
 /// Copies `count` bytes from `source` to `destination`, where `destination`

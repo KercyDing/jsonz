@@ -296,6 +296,55 @@ test "container iteration" {
     try std.testing.expectEqual(value.Kind.object, elements);
 }
 
+test "access past a container child" {
+    // A container occupies its whole subtree in the pool, so accessors and
+    // iterators must step over it instead of by a fixed slot count. Every
+    // container here is followed by a later sibling, which is what a fixed
+    // stride gets wrong.
+    var document = try parseWith(
+        std.testing.allocator,
+        "{\"a\":[1,2],\"b\":{\"c\":[3,4]},\"d\":5,\"e\":[],\"f\":[[6],[7,8]]}",
+        .{},
+    );
+    defer document.deinit();
+
+    try std.testing.expectEqual(@as(u64, 5), document.field("d").uint());
+    try std.testing.expectEqual(@as(u64, 3), document.field("b").field("c").array().at(0).uint());
+    try std.testing.expectEqual(@as(u64, 4), document.field("b").field("c").array().at(1).uint());
+    try std.testing.expectEqual(@as(usize, 0), document.field("e").array().len());
+    try std.testing.expectEqual(@as(u64, 7), document.field("f").array().at(1).array().at(0).uint());
+    try std.testing.expectEqual(@as(u64, 8), document.field("f").array().at(1).array().at(1).uint());
+    try std.testing.expect(document.get("missing") == null);
+
+    // "c" belongs to "b", so the top level has five fields.
+    const keys = [_][]const u8{ "a", "b", "d", "e", "f" };
+    var fields = document.object().iterator();
+    var field_index: usize = 0;
+    while (fields.next()) |entry| : (field_index += 1) {
+        try std.testing.expectEqualStrings(keys[field_index], entry.key);
+    }
+    try std.testing.expectEqual(keys.len, field_index);
+
+    var list = try parseWith(std.testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
+    defer list.deinit();
+
+    const array = list.array();
+    try std.testing.expectEqual(@as(usize, 5), array.len());
+    try std.testing.expectEqual(@as(u64, 1), array.at(0).array().at(0).uint());
+    try std.testing.expectEqual(@as(u64, 3), array.at(1).array().at(1).array().at(0).uint());
+    try std.testing.expectEqual(@as(u64, 4), array.at(2).uint());
+    try std.testing.expectEqual(@as(usize, 0), array.at(3).array().len());
+    try std.testing.expectEqual(@as(u64, 5), array.at(4).uint());
+    try std.testing.expect(array.get(5) == null);
+
+    var elements = array.iterator();
+    var element_index: usize = 0;
+    while (elements.next()) |element| : (element_index += 1) {
+        if (element_index == 2) try std.testing.expect(element.isUint());
+    }
+    try std.testing.expectEqual(@as(usize, 5), element_index);
+}
+
 test "caller storage" {
     const input = "{\"name\":\"jsonz\",\"values\":[1,2]}";
     const storage = try std.testing.allocator.alloc(u8, parseBufferSize(input.len, .{}));

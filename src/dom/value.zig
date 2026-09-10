@@ -179,11 +179,14 @@ pub const Array = struct {
     /// Returns the element at `index`, or `null` when the index is out of bounds.
     pub fn get(self: Array, index: usize) ?Value {
         if (index >= self.len()) return null;
-        // A container's children start at the next pool slot.
-        return .{
-            .storage = self.storage,
-            .index = self.index + 1 + @as(u32, @intCast(index)),
-        };
+        // Children are stored depth-first, so an earlier child that is itself a
+        // container occupies its whole subtree, not one slot.
+        var cursor = self.index + 1;
+        var remaining = index;
+        while (remaining != 0) : (remaining -= 1) {
+            cursor += subtreeLength(self.storage, cursor);
+        }
+        return .{ .storage = self.storage, .index = cursor };
     }
 
     /// Returns the element at `index`. Asserts that `index` is in bounds.
@@ -195,20 +198,24 @@ pub const Array = struct {
 
     /// Returns an iterator over the array's values.
     pub fn iterator(self: Array) ArrayIterator {
-        return .{ .array = self };
+        return .{ .array = self, .remaining = self.len(), .cursor = self.index + 1 };
     }
 };
 
 /// Iterator returned by `Array.iterator`.
 pub const ArrayIterator = struct {
     array: Array,
-    index: usize = 0,
+    remaining: usize,
+    /// Pool slot of the next element.
+    cursor: u32,
 
     /// Returns the next value, or `null` after the final element.
     pub fn next(self: *ArrayIterator) ?Value {
-        const value = self.array.get(self.index) orelse return null;
-        self.index += 1;
-        return value;
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
+        const index = self.cursor;
+        self.cursor += subtreeLength(self.array.storage, index);
+        return .{ .storage = self.array.storage, .index = index };
     }
 };
 
@@ -229,16 +236,15 @@ pub const Object = struct {
         return pool_mod.valueLen(self.storage.values[self.index]);
     }
 
-    fn keyAt(self: Object, index: usize) *const pool_mod.Value {
-        return &self.storage.values[self.index + 1 + @as(u32, @intCast(index)) * 2];
-    }
-
-    fn valueAt(self: Object, index: usize) *const pool_mod.Value {
-        return &self.storage.values[self.valueIndex(index)];
-    }
-
-    fn valueIndex(self: Object, index: usize) u32 {
-        return self.index + 2 + @as(u32, @intCast(index)) * 2;
+    /// Pool slot of the `index`-th key; the value follows it.
+    fn keyIndex(self: Object, index: usize) u32 {
+        var cursor = self.index + 1;
+        var remaining = index;
+        while (remaining != 0) : (remaining -= 1) {
+            // A key is one slot, and its value is one slot plus its subtree.
+            cursor += 1 + subtreeLength(self.storage, cursor + 1);
+        }
+        return cursor;
     }
 
     /// Looks up `key`, returning `null` when it is absent. Keys are compared by
@@ -247,11 +253,12 @@ pub const Object = struct {
         const count = self.len();
         var index: usize = 0;
         while (index < count) : (index += 1) {
-            const entry_key = self.keyAt(index);
+            const cursor = self.keyIndex(index);
+            const entry_key = &self.storage.values[cursor];
             if (pool_mod.valueLen(entry_key.*) == key.len and
                 std.mem.eql(u8, stringAt(self.storage, entry_key), key))
             {
-                return .{ .storage = self.storage, .index = self.valueIndex(index) };
+                return .{ .storage = self.storage, .index = cursor + 1 };
             }
         }
         return null;
@@ -266,28 +273,41 @@ pub const Object = struct {
 
     /// Returns an iterator over the object's fields in document order.
     pub fn iterator(self: Object) ObjectIterator {
-        return .{ .object = self };
+        return .{ .object = self, .remaining = self.len(), .cursor = self.index + 1 };
     }
 };
 
 /// Iterator returned by `Object.iterator`.
 pub const ObjectIterator = struct {
     object: Object,
-    index: usize = 0,
+    remaining: usize,
+    /// Pool slot of the next key.
+    cursor: u32,
 
     /// Returns the next field, or `null` after the final field.
     pub fn next(self: *ObjectIterator) ?ObjectEntry {
-        if (self.index >= self.object.len()) return null;
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
         const storage = self.object.storage;
-        const key = self.object.keyAt(self.index);
-        const value_index = self.object.valueIndex(self.index);
-        self.index += 1;
+        const key = self.cursor;
+        const value_index = key + 1;
+        self.cursor = value_index + subtreeLength(storage, value_index);
         return .{
-            .key = stringAt(storage, key),
+            .key = stringAt(storage, &storage.values[key]),
             .value = .{ .storage = storage, .index = value_index },
         };
     }
 };
+
+/// The number of pool slots the value at `index` occupies: one for a scalar,
+/// and the whole subtree for a container.
+inline fn subtreeLength(storage: *const Storage, index: u32) u32 {
+    const value = &storage.values[index];
+    return switch (pool_mod.valueType(value.*)) {
+        .array, .object => @intCast(value.payload.offset / pool_mod.value_size),
+        else => 1,
+    };
+}
 
 fn stringAt(storage: *const Storage, value: *const pool_mod.Value) []const u8 {
     const offset: usize = @intCast(value.payload.offset);

@@ -7,6 +7,33 @@ const Subtype = pool_mod.Subtype;
 const Type = pool_mod.Type;
 const Value = pool_mod.Value;
 
+/// Bytes checked at once while scanning a string for characters that need work.
+const scan_chunk = 32;
+const ScanVector = @Vector(scan_chunk, u8);
+
+/// Whether a chunk contains a quote, an escape, a control byte, or a non-ASCII
+/// byte; a plain ASCII run can be skipped without touching it byte by byte.
+inline fn chunkHasSpecial(bytes: ScanVector) bool {
+    const quote = bytes == @as(ScanVector, @splat('"'));
+    const escape = bytes == @as(ScanVector, @splat('\\'));
+    const control = bytes < @as(ScanVector, @splat(0x20));
+    const high = bytes > @as(ScanVector, @splat(0x7f));
+    return @reduce(.Or, quote | escape | control | high);
+}
+
+/// Continuation-byte count for a UTF-8 lead byte, or `0xFF` when invalid.
+///
+/// This is the same accepted set as yyjson: continuation bytes and overlong
+/// two-byte leads (`0x80..0xC1`) and leads above `0xF4` are invalid.
+const utf8_continuations: [256]u8 = blk: {
+    var table: [256]u8 = @splat(0xFF);
+    for (0x00..0x80) |i| table[i] = 0;
+    for (0xC2..0xE0) |i| table[i] = 1;
+    for (0xE0..0xF0) |i| table[i] = 2;
+    for (0xF0..0xF5) |i| table[i] = 3;
+    break :blk table;
+};
+
 /// Options that control DOM parsing, matching yyjson's read flags.
 pub const Options = struct {
     /// Accept `//` and `/* ... */` comments, which are not part of standard JSON.
@@ -60,6 +87,8 @@ const Reader = struct {
         var root: ?u32 = null;
 
         while (state != .done) {
+            // Each state skips trivia exactly once; `beginValue` and the
+            // separator checks below never scan it again.
             try self.skipTrivia();
             switch (state) {
                 .root => {
@@ -75,7 +104,8 @@ const Reader = struct {
                     }
                 },
                 .array_value => {
-                    if (try self.consume(']')) {
+                    if (self.pos < self.input.len and self.input[self.pos] == ']') {
+                        self.pos += 1;
                         state = try self.closeContainer();
                         continue;
                     }
@@ -87,18 +117,27 @@ const Reader = struct {
                     }
                 },
                 .array_end => {
-                    if (try self.consume(',')) {
-                        if (try self.peek(']')) {
-                            if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                    if (self.pos == self.input.len) return error.InvalidJson;
+                    switch (self.input[self.pos]) {
+                        ',' => {
+                            self.pos += 1;
+                            try self.skipTrivia();
+                            if (self.pos < self.input.len and self.input[self.pos] == ']') {
+                                if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                self.pos += 1;
+                                state = try self.closeContainer();
+                            } else state = .array_value;
+                        },
+                        ']' => {
                             self.pos += 1;
                             state = try self.closeContainer();
-                        } else state = .array_value;
-                    } else if (try self.consume(']')) {
-                        state = try self.closeContainer();
-                    } else return error.InvalidJson;
+                        },
+                        else => return error.InvalidJson,
+                    }
                 },
                 .object_key => {
-                    if (try self.consume('}')) {
+                    if (self.pos < self.input.len and self.input[self.pos] == '}') {
+                        self.pos += 1;
                         state = try self.closeContainer();
                         continue;
                     }
@@ -108,7 +147,8 @@ const Reader = struct {
                     state = .object_colon;
                 },
                 .object_colon => {
-                    if (!try self.consume(':')) return error.InvalidJson;
+                    if (self.pos == self.input.len or self.input[self.pos] != ':') return error.InvalidJson;
+                    self.pos += 1;
                     state = .object_value;
                 },
                 .object_value => {
@@ -120,15 +160,23 @@ const Reader = struct {
                     }
                 },
                 .object_end => {
-                    if (try self.consume(',')) {
-                        if (try self.peek('}')) {
-                            if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                    if (self.pos == self.input.len) return error.InvalidJson;
+                    switch (self.input[self.pos]) {
+                        ',' => {
+                            self.pos += 1;
+                            try self.skipTrivia();
+                            if (self.pos < self.input.len and self.input[self.pos] == '}') {
+                                if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                self.pos += 1;
+                                state = try self.closeContainer();
+                            } else state = .object_key;
+                        },
+                        '}' => {
                             self.pos += 1;
                             state = try self.closeContainer();
-                        } else state = .object_key;
-                    } else if (try self.consume('}')) {
-                        state = try self.closeContainer();
-                    } else return error.InvalidJson;
+                        },
+                        else => return error.InvalidJson,
+                    }
                 },
                 .done => unreachable,
             }
@@ -224,54 +272,85 @@ const Reader = struct {
         });
     }
 
+    /// Reads a number, accumulating digits while scanning.
+    ///
+    /// An integer that fits in `u64`/`i64` is kept exact; anything with a
+    /// fraction or exponent, or that overflows, is converted to a double, the
+    /// same demotion yyjson does.
     fn readNumber(self: *Reader) Error!u32 {
+        const input = self.input;
         const start = self.pos;
-        if (self.input[self.pos] == '-') self.pos += 1;
-        if (self.pos == self.input.len) return error.InvalidJson;
-        if (self.input[self.pos] == '0') {
-            self.pos += 1;
-        } else if (self.input[self.pos] >= '1' and self.input[self.pos] <= '9') {
-            while (self.pos < self.input.len and std.ascii.isDigit(self.input[self.pos])) self.pos += 1;
+        var pos = start;
+
+        const negative = input[pos] == '-';
+        if (negative) pos += 1;
+        if (pos == input.len) return error.InvalidJson;
+
+        var mantissa: u64 = 0;
+        var digits: usize = 0;
+        var overflow = false;
+        const first = input[pos];
+        if (first == '0') {
+            pos += 1;
+        } else if (first >= '1' and first <= '9') {
+            while (pos < input.len and std.ascii.isDigit(input[pos])) : (pos += 1) {
+                const digit: u64 = input[pos] - '0';
+                if (!overflow) {
+                    // 19 digits always fit; later digits need an exact check.
+                    if (digits < 19) {
+                        mantissa = mantissa * 10 + digit;
+                    } else if (mantissa <= (std.math.maxInt(u64) - digit) / 10) {
+                        mantissa = mantissa * 10 + digit;
+                    } else {
+                        overflow = true;
+                    }
+                }
+                digits += 1;
+            }
         } else return error.InvalidJson;
 
         var real = false;
-        if (self.pos < self.input.len and self.input[self.pos] == '.') {
+        if (pos < input.len and input[pos] == '.') {
             real = true;
-            self.pos += 1;
-            if (self.pos == self.input.len or !std.ascii.isDigit(self.input[self.pos])) return error.InvalidJson;
-            while (self.pos < self.input.len and std.ascii.isDigit(self.input[self.pos])) self.pos += 1;
+            pos += 1;
+            if (pos == input.len or !std.ascii.isDigit(input[pos])) return error.InvalidJson;
+            while (pos < input.len and std.ascii.isDigit(input[pos])) pos += 1;
         }
-        if (self.pos < self.input.len and (self.input[self.pos] == 'e' or self.input[self.pos] == 'E')) {
+        if (pos < input.len and (input[pos] == 'e' or input[pos] == 'E')) {
             real = true;
-            self.pos += 1;
-            if (self.pos < self.input.len and (self.input[self.pos] == '+' or self.input[self.pos] == '-')) self.pos += 1;
-            if (self.pos == self.input.len or !std.ascii.isDigit(self.input[self.pos])) return error.InvalidJson;
-            while (self.pos < self.input.len and std.ascii.isDigit(self.input[self.pos])) self.pos += 1;
+            pos += 1;
+            if (pos < input.len and (input[pos] == '+' or input[pos] == '-')) pos += 1;
+            if (pos == input.len or !std.ascii.isDigit(input[pos])) return error.InvalidJson;
+            while (pos < input.len and std.ascii.isDigit(input[pos])) pos += 1;
         }
-        const raw = self.input[start..self.pos];
 
-        if (!real) {
-            // An integer that fits is kept exact; yyjson demotes anything
-            // larger to a double, which the fallback below does too.
-            if (raw[0] == '-') {
-                if (std.fmt.parseInt(i64, raw, 10)) |number| {
+        if (!real and !overflow) {
+            if (negative) {
+                if (mantissa < (@as(u64, 1) << 63)) {
+                    self.pos = pos;
                     return self.append(.{
                         .tag = pool_mod.makeTag(.number, pool_mod.sint, 0),
-                        .uni = .{ .int = number },
+                        .uni = .{ .int = -@as(i64, @intCast(mantissa)) },
                     });
-                } else |_| {}
-            } else {
-                if (std.fmt.parseInt(u64, raw, 10)) |number| {
+                } else if (mantissa == (@as(u64, 1) << 63)) {
+                    self.pos = pos;
                     return self.append(.{
-                        .tag = pool_mod.makeTag(.number, pool_mod.uint, 0),
-                        .uni = .{ .uint = number },
+                        .tag = pool_mod.makeTag(.number, pool_mod.sint, 0),
+                        .uni = .{ .int = std.math.minInt(i64) },
                     });
-                } else |_| {}
+                }
+            } else {
+                self.pos = pos;
+                return self.append(.{
+                    .tag = pool_mod.makeTag(.number, pool_mod.uint, 0),
+                    .uni = .{ .uint = mantissa },
+                });
             }
         }
 
-        const number = float.parseNumber(f64, self.input, start) catch return error.InvalidJson;
+        const number = float.parseNumber(f64, input, start) catch return error.InvalidJson;
         if (!std.math.isFinite(number.value)) return error.InvalidJson;
+        self.pos = number.end;
         return self.append(.{
             .tag = pool_mod.makeTag(.number, .real, 0),
             .uni = .{ .float = number.value },
@@ -281,100 +360,138 @@ const Reader = struct {
     /// Reads a string value, decoding escapes in place.
     ///
     /// Strings without escapes take a scan-only fast path that never writes to
-    /// the input buffer; the common case in real documents.
+    /// the input buffer. Plain 32-byte chunks are skipped with SIMD; a chunk
+    /// that contains a quote, escape, control byte, or non-ASCII byte is walked
+    /// byte by byte before the vector scan resumes, so non-ASCII text does not
+    /// pay for a vector reload per character.
     fn readString(self: *Reader) Error!u32 {
         self.pos += 1;
         const start = self.pos;
+        const input = self.input;
 
         var scan = start;
-        while (scan < self.input.len) {
-            const byte = self.input[scan];
-            if (byte == '"') {
-                self.pos = scan + 1;
-                return self.append(.{
-                    .tag = pool_mod.makeTag(.string, pool_mod.no_escape, scan - start),
-                    .uni = .{ .offset = start },
-                });
+        scan_loop: while (true) {
+            while (scan + scan_chunk <= input.len) {
+                const bytes: ScanVector = input[scan..][0..scan_chunk].*;
+                if (chunkHasSpecial(bytes)) break;
+                scan += scan_chunk;
             }
-            if (byte == '\\') break;
-            if (byte < 0x20) return error.InvalidJson;
-            if (byte < 0x80) {
-                scan += 1;
-            } else {
-                scan += try self.utf8SequenceLen(scan);
+            const window_end = @min(scan + scan_chunk, input.len);
+            while (scan < window_end) {
+                const byte = input[scan];
+                if (byte == '"') {
+                    self.pos = scan + 1;
+                    return self.append(.{
+                        .tag = pool_mod.makeTag(.string, pool_mod.no_escape, scan - start),
+                        .uni = .{ .offset = start },
+                    });
+                }
+                if (byte == '\\') break :scan_loop;
+                if (byte < 0x20) return error.InvalidJson;
+                if (byte >= 0x80) {
+                    scan += try self.utf8SequenceLen(scan);
+                } else {
+                    scan += 1;
+                }
             }
+            if (scan >= input.len) return error.InvalidJson;
         }
-        if (scan == self.input.len) return error.InvalidJson;
 
         // At least one escape: decode the rest in place. `write` trails `scan`
         // because escape sequences shrink.
         self.pos = scan;
         var write = scan;
-        while (self.pos < self.input.len) {
-            const byte = self.input[self.pos];
-            switch (byte) {
-                '"' => {
-                    self.pos += 1;
-                    return self.append(.{
-                        .tag = pool_mod.makeTag(.string, .none, write - start),
-                        .uni = .{ .offset = start },
-                    });
-                },
-                '\\' => {
-                    self.pos += 1;
-                    if (self.pos == self.input.len) return error.InvalidJson;
-                    const escape = self.input[self.pos];
-                    self.pos += 1;
-                    if (escape == 'u') {
-                        write = try self.readUnicodeEscape(write);
-                        continue;
-                    }
-                    const decoded: u8 = switch (escape) {
-                        '"', '\\', '/' => escape,
-                        'b' => 0x08,
-                        'f' => 0x0c,
-                        'n' => '\n',
-                        'r' => '\r',
-                        't' => '\t',
-                        else => return error.InvalidJson,
-                    };
-                    self.input[write] = decoded;
+        while (true) {
+            while (self.pos + scan_chunk <= input.len) {
+                const bytes: ScanVector = input[self.pos..][0..scan_chunk].*;
+                if (chunkHasSpecial(bytes)) break;
+                std.mem.copyForwards(
+                    u8,
+                    input[write..][0..scan_chunk],
+                    input[self.pos..][0..scan_chunk],
+                );
+                write += scan_chunk;
+                self.pos += scan_chunk;
+            }
+            const window_end = @min(self.pos + scan_chunk, input.len);
+            while (self.pos < window_end) {
+                const byte = input[self.pos];
+                if (byte >= 0x20 and byte != '"' and byte != '\\' and byte < 0x80) {
+                    input[write] = byte;
                     write += 1;
-                },
-                0x00...0x1f => return error.InvalidJson,
-                else => {
-                    if (byte < 0x80) {
-                        self.input[write] = byte;
-                        write += 1;
+                    self.pos += 1;
+                    continue;
+                }
+                switch (byte) {
+                    '"' => {
                         self.pos += 1;
-                    } else {
+                        return self.append(.{
+                            .tag = pool_mod.makeTag(.string, .none, write - start),
+                            .uni = .{ .offset = start },
+                        });
+                    },
+                    '\\' => {
+                        self.pos += 1;
+                        if (self.pos == input.len) return error.InvalidJson;
+                        const escape = input[self.pos];
+                        self.pos += 1;
+                        if (escape == 'u') {
+                            write = try self.readUnicodeEscape(write);
+                            continue;
+                        }
+                        const decoded: u8 = switch (escape) {
+                            '"', '\\', '/' => escape,
+                            'b' => 0x08,
+                            'f' => 0x0c,
+                            'n' => '\n',
+                            'r' => '\r',
+                            't' => '\t',
+                            else => return error.InvalidJson,
+                        };
+                        input[write] = decoded;
+                        write += 1;
+                    },
+                    0x00...0x1f => return error.InvalidJson,
+                    else => {
                         const seq_len = try self.utf8SequenceLen(self.pos);
                         // `write` never passes `self.pos`, so copy forwards.
                         std.mem.copyForwards(
                             u8,
-                            self.input[write..][0..seq_len],
-                            self.input[self.pos..][0..seq_len],
+                            input[write..][0..seq_len],
+                            input[self.pos..][0..seq_len],
                         );
                         write += seq_len;
                         self.pos += seq_len;
-                    }
-                },
+                    },
+                }
             }
+            if (self.pos >= input.len) return error.InvalidJson;
         }
-        return error.InvalidJson;
     }
 
     /// Validates one UTF-8 sequence at `pos` and returns its byte length.
     ///
     /// yyjson validates UTF-8 by default, so this rejects lone continuation
     /// bytes, overlong forms, surrogates, and code points beyond U+10FFFF.
-    fn utf8SequenceLen(self: *Reader, pos: usize) Error!usize {
-        const seq_len: usize = std.unicode.utf8ByteSequenceLength(self.input[pos]) catch
-            return error.InvalidJson;
-        if (pos + seq_len > self.input.len) return error.InvalidJson;
-        _ = std.unicode.utf8Decode(self.input[pos..][0..seq_len]) catch
-            return error.InvalidJson;
-        return seq_len;
+    inline fn utf8SequenceLen(self: *Reader, pos: usize) Error!usize {
+        const input = self.input;
+        const b0 = input[pos];
+        const extra = utf8_continuations[b0];
+        if (extra == 0xFF or pos + extra >= input.len) return error.InvalidJson;
+        if (input[pos + 1] & 0xC0 != 0x80) return error.InvalidJson;
+        if (extra == 1) return 2;
+        if (input[pos + 2] & 0xC0 != 0x80) return error.InvalidJson;
+        if (extra == 2) {
+            const b1 = input[pos + 1];
+            if (b0 == 0xE0 and b1 < 0xA0) return error.InvalidJson;
+            if (b0 == 0xED and b1 >= 0xA0) return error.InvalidJson;
+            return 3;
+        }
+        if (input[pos + 3] & 0xC0 != 0x80) return error.InvalidJson;
+        const b1 = input[pos + 1];
+        if (b0 == 0xF0 and b1 < 0x90) return error.InvalidJson;
+        if (b0 == 0xF4 and b1 >= 0x90) return error.InvalidJson;
+        return 4;
     }
 
     /// Decodes `\uXXXX`, including surrogate pairs, into UTF-8 at `write`.
@@ -416,8 +533,16 @@ const Reader = struct {
         return value;
     }
 
-    fn append(self: *Reader, value: Value) Error!u32 {
-        return self.pool.append(value) catch return error.OutOfMemory;
+    /// Appends a value; the common case is inlined and only growth is a call.
+    inline fn append(self: *Reader, value: Value) Error!u32 {
+        const pool = self.pool;
+        if (@as(usize, pool.len) == pool.buffer.len) {
+            return pool.append(value) catch return error.OutOfMemory;
+        }
+        const index: u32 = @intCast(pool.len);
+        pool.buffer[pool.len] = value;
+        pool.len += 1;
+        return index;
     }
 
     fn skipTrivia(self: *Reader) Error!void {
@@ -450,18 +575,6 @@ const Reader = struct {
             }
         }
         return error.InvalidJson;
-    }
-
-    fn consume(self: *Reader, byte: u8) Error!bool {
-        try self.skipTrivia();
-        if (self.pos >= self.input.len or self.input[self.pos] != byte) return false;
-        self.pos += 1;
-        return true;
-    }
-
-    fn peek(self: *Reader, byte: u8) Error!bool {
-        try self.skipTrivia();
-        return self.pos < self.input.len and self.input[self.pos] == byte;
     }
 };
 

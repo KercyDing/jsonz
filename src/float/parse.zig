@@ -36,13 +36,31 @@ pub fn Result(comptime T: type) type {
     };
 }
 
-/// Scans the JSON number starting at `start` and converts it to `T`.
+/// A scanned JSON number: everything a caller needs to decide between an exact
+/// integer and a double, in one pass over the digits.
+pub const Scanned = struct {
+    negative: bool,
+    /// Up to 19 significant decimal digits, with `exponent` placing them.
+    mantissa: u64,
+    /// Decimal exponent of `mantissa` after dropping insignificant digits.
+    exponent: i64,
+    /// True when significant digits were dropped, so the conversion may need
+    /// the slow path.
+    many_digits: bool,
+    /// The exact magnitude when the token is a plain integer (no fraction and
+    /// no exponent) that fits in `u64`, otherwise `null`.
+    integer: ?u64,
+    /// Offset just past the number.
+    end: usize,
+};
+
+/// Scans the JSON number starting at `start` without converting it.
 ///
 /// The scanner rejects everything JSON rejects that `std.fmt.parseFloat`
 /// accepts (`1.`, `.5`, `+1`, `01`, `1e`, leading zeros, underscores, `inf`,
 /// `nan`, hex floats). Trailing bytes that no JSON number can contain are left
 /// for the caller, matching `Cursor.scanNumber`.
-pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) {
+pub inline fn scan(input: []const u8, start: usize) Error!Scanned {
     if (start == input.len) return error.UnexpectedEof;
 
     var pos = start;
@@ -60,8 +78,10 @@ pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) 
     var mantissa: u64 = 0;
     var significant: usize = 0;
     var dropped: usize = 0;
+    var integer_digits: usize = 1;
 
     // Integer part: JSON allows a lone `0` or a nonzero leading digit.
+    const integer_start = pos;
     const integer_first = input[pos];
     if (integer_first == '0') {
         pos += 1;
@@ -69,13 +89,16 @@ pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) 
         mantissa = integer_first - '0';
         significant = 1;
         pos = scanDigits(input, pos + 1, &mantissa, &significant, &dropped);
+        integer_digits = pos - integer_start;
     } else {
         return error.InvalidNumber;
     }
 
     // Fractional part.
     var fraction_digits: usize = 0;
+    var has_fraction = false;
     if (pos < input.len and input[pos] == '.') {
+        has_fraction = true;
         pos += 1;
         const fraction_start = pos;
         if (pos == input.len) return error.InvalidNumber;
@@ -98,8 +121,10 @@ pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) 
     }
 
     // Exponent part.
+    var has_exponent = false;
     var exponent: i64 = 0;
     if (pos < input.len and (input[pos] == 'e' or input[pos] == 'E')) {
+        has_exponent = true;
         pos += 1;
         var exponent_negative = false;
         if (pos < input.len and (input[pos] == '+' or input[pos] == '-')) {
@@ -120,19 +145,52 @@ pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) 
     // place each, while every fractional digit shifts it down by one.
     exponent += @as(i64, @intCast(dropped)) - @as(i64, @intCast(fraction_digits));
 
-    if (comptime hasFastConverter(T)) {
-        if (convert(T, negative, mantissa, exponent, dropped != 0)) |value| {
-            if (comptime builtin.is_test) {
-                assertMatches(T, value, input[start..end]);
+    var integer: ?u64 = null;
+    if (!has_fraction and !has_exponent) {
+        if (integer_digits <= max_digits) {
+            integer = mantissa;
+        } else if (integer_digits == max_digits + 1) {
+            // `mantissa` holds the first 19 digits; add the twentieth if the
+            // result still fits.
+            const last: u64 = input[end - 1] - '0';
+            if (mantissa <= (std.math.maxInt(u64) - last) / 10) {
+                integer = mantissa * 10 + last;
             }
-            return .{ .value = value, .end = end };
         }
+    }
+
+    return .{
+        .negative = negative,
+        .mantissa = mantissa,
+        .exponent = exponent,
+        .many_digits = dropped != 0,
+        .integer = integer,
+        .end = end,
+    };
+}
+
+/// Converts scanned digits to `T`, or returns `null` when the fast paths cannot
+/// prove the correctly rounded result and the caller should fall back.
+pub inline fn convertScanned(comptime T: type, scanned: Scanned) ?T {
+    if (comptime !hasFastConverter(T)) return null;
+    return convert(T, scanned.negative, scanned.mantissa, scanned.exponent, scanned.many_digits);
+}
+
+/// Scans the JSON number starting at `start` and converts it to `T`.
+pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) {
+    const scanned = try scan(input, start);
+    if (convertScanned(T, scanned)) |value| {
+        if (comptime builtin.is_test) {
+            assertMatches(T, value, input[start..scanned.end]);
+        }
+        return .{ .value = value, .end = scanned.end };
     }
 
     // Unsupported types and near-halfway values go through the standard
     // library, so results stay bit-identical to it.
-    const value = std.fmt.parseFloat(T, input[start..end]) catch return error.InvalidNumber;
-    return .{ .value = value, .end = end };
+    const value = std.fmt.parseFloat(T, input[start..scanned.end]) catch
+        return error.InvalidNumber;
+    return .{ .value = value, .end = scanned.end };
 }
 
 /// Consumes a run of decimal digits.

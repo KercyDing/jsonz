@@ -34,6 +34,7 @@ pub const no_escape: Subtype = .one;
 pub const type_mask: u64 = 0x07;
 pub const subtype_mask: u64 = 0x18;
 pub const tag_bits = 8;
+pub const value_size = @sizeOf(Value);
 
 pub fn makeTag(value_type: Type, subtype: Subtype, len: usize) u64 {
     return (@as(u64, @intCast(len)) << tag_bits) |
@@ -51,6 +52,17 @@ pub fn valueSubtype(value: Value) Subtype {
 
 pub fn valueLen(value: Value) usize {
     return @intCast(value.tag >> tag_bits);
+}
+
+/// yyjson stores container links as byte offsets rather than pointers, so its
+/// reader can grow the contiguous value array with realloc.
+pub fn byteOffset(from: u32, to: u32) u64 {
+    return (@as(u64, to) - @as(u64, from)) * value_size;
+}
+
+pub fn indexAtOffset(from: u32, offset: u64) u32 {
+    std.debug.assert(offset % value_size == 0);
+    return from + @as(u32, @intCast(offset / value_size));
 }
 
 /// Reader value storage with yyjson's initial capacity estimates and 1.5x
@@ -107,6 +119,14 @@ test "tag packs type subtype and length" {
     try std.testing.expectEqual(Type.number, valueType(value));
     try std.testing.expectEqual(Subtype.real, valueSubtype(value));
     try std.testing.expectEqual(@as(usize, 42), valueLen(value));
+}
+
+test "container links use value-sized byte offsets" {
+    const parent: u32 = 3;
+    const child: u32 = 7;
+    const offset = byteOffset(parent, child);
+    try std.testing.expectEqual(@as(u64, 64), offset);
+    try std.testing.expectEqual(child, indexAtOffset(parent, offset));
 }
 
 test "pool grows by one point five" {

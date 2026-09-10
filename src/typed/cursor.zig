@@ -1,4 +1,5 @@
 const std = @import("std");
+const float_mod = @import("float.zig");
 
 /// The next JSON syntax item returned by `Cursor.next` or `Cursor.peek`.
 ///
@@ -138,6 +139,16 @@ pub const Cursor = struct {
         };
         self.pos = pos;
         return result;
+    }
+
+    /// Reads the next JSON number as floating-point type `T`.
+    ///
+    /// The number is scanned and converted in a single pass; see `float.zig`.
+    pub inline fn readFloat(self: *Cursor, comptime T: type) Error!T {
+        self.skipWhitespace();
+        const parsed = try float_mod.parse(T, self.input, self.pos);
+        self.pos = parsed.end;
+        return parsed.value;
     }
 
     /// The result of consuming a container separator or terminator.

@@ -113,9 +113,9 @@ pub const Deserializer = struct {
 
     /// Deserializes the next JSON number as floating-point type `T`.
     pub fn deserializeFloat(self: *Deserializer, comptime T: type) Error!T {
-        return switch (try self.cursor.next()) {
-            .number => |raw| std.fmt.parseFloat(T, raw) catch error.InvalidNumber,
-            else => error.WrongType,
+        return self.cursor.readFloat(T) catch |err| switch (err) {
+            error.UnexpectedToken => error.WrongType,
+            else => |other| other,
         };
     }
 

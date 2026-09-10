@@ -468,7 +468,7 @@ const Reader = struct {
         };
     }
 
-    fn scanLiteral(
+    inline fn scanLiteral(
         self: *Reader,
         pos: usize,
         comptime text: []const u8,
@@ -491,7 +491,7 @@ const Reader = struct {
     /// `float.scanNumber` reports the exact integer value when the token is a
     /// plain integer, and the significant digits a double conversion needs
     /// otherwise, so no digits are scanned twice.
-    fn scanNumber(self: *Reader, start: usize) Error!Scan {
+    inline fn scanNumber(self: *Reader, start: usize) Error!Scan {
         const scanned = float.scanNumber(self.input[0..self.end], start) catch
             return error.InvalidJson;
 

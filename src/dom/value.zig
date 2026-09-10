@@ -1,5 +1,6 @@
 const std = @import("std");
-const bridge = @import("yyjson_c");
+const pool_mod = @import("pool.zig");
+const writer_mod = @import("writer.zig");
 
 /// The JSON kind represented by a DOM value.
 pub const Kind = enum {
@@ -13,30 +14,54 @@ pub const Kind = enum {
     object,
 };
 
-pub const WriteOptions = struct {
-    /// Format objects and arrays with indentation and line breaks.
-    pretty: bool = false,
+/// Options that control DOM serialization.
+pub const WriteOptions = writer_mod.WriteOptions;
+
+/// The parsed storage behind every `Value`.
+///
+/// `input` is the (owned or caller-provided) JSON buffer whose escape
+/// sequences were decoded in place; `values` is the value pool. Both slices are
+/// borrowed from the owning `Document` and are only valid while it lives.
+pub const Storage = struct {
+    values: []const pool_mod.Value,
+    input: []const u8,
 };
 
-/// A lightweight view of a value owned by a `Document`.
-///
-/// It does not own memory and is invalid after its source document is deinitialized.
+/// A borrowed view of one DOM value; it does not own memory.
 pub const Value = struct {
-    handle: *const bridge.yyjson_val,
+    storage: *const Storage,
+    index: u32,
+
+    fn raw(self: Value) *const pool_mod.Value {
+        return &self.storage.values[self.index];
+    }
 
     /// Returns this value's JSON kind.
     pub fn kind(self: Value) Kind {
-        return @enumFromInt(bridge.jsonz_yyjson_kind(self.handle));
+        const value = self.raw();
+        return switch (pool_mod.valueType(value.*)) {
+            .null => .null,
+            .bool => .bool,
+            .number => switch (pool_mod.valueSubtype(value.*)) {
+                .real => .float,
+                .one => .int,
+                .none => .uint,
+            },
+            .string => .string,
+            .array => .array,
+            .object => .object,
+            else => unreachable,
+        };
     }
 
     /// Returns whether this value is JSON `null`.
     pub fn isNull(self: Value) bool {
-        return self.kind() == .null;
+        return pool_mod.valueType(self.raw().*) == .null;
     }
 
     /// Returns whether this value is a boolean.
     pub fn isBool(self: Value) bool {
-        return self.kind() == .bool;
+        return pool_mod.valueType(self.raw().*) == .bool;
     }
 
     /// Returns whether this value is a signed integer.
@@ -56,59 +81,59 @@ pub const Value = struct {
 
     /// Returns whether this value is a string.
     pub fn isString(self: Value) bool {
-        return self.kind() == .string;
+        return pool_mod.valueType(self.raw().*) == .string;
     }
 
     /// Returns whether this value is an array.
     pub fn isArray(self: Value) bool {
-        return self.kind() == .array;
+        return pool_mod.valueType(self.raw().*) == .array;
     }
 
     /// Returns whether this value is an object.
     pub fn isObject(self: Value) bool {
-        return self.kind() == .object;
+        return pool_mod.valueType(self.raw().*) == .object;
     }
 
     /// Returns the boolean value. Asserts that `isBool()` is true.
     pub fn @"bool"(self: Value) bool {
         std.debug.assert(self.isBool());
-        return bridge.jsonz_yyjson_bool(self.handle);
+        return pool_mod.valueSubtype(self.raw().*) == pool_mod.true_value;
     }
 
     /// Returns the signed integer value. Asserts that `isInt()` is true.
     pub fn int(self: Value) i64 {
         std.debug.assert(self.isInt());
-        return bridge.jsonz_yyjson_sint(self.handle);
+        return self.raw().uni.int;
     }
 
     /// Returns the unsigned integer value. Asserts that `isUint()` is true.
     pub fn uint(self: Value) u64 {
         std.debug.assert(self.isUint());
-        return bridge.jsonz_yyjson_uint(self.handle);
+        return self.raw().uni.uint;
     }
 
     /// Returns the floating-point value. Asserts that `isFloat()` is true.
     pub fn float(self: Value) f64 {
         std.debug.assert(self.isFloat());
-        return bridge.jsonz_yyjson_real(self.handle);
+        return self.raw().uni.float;
     }
 
-    /// Returns a string slice borrowed from the source document. Asserts that `isString()` is true.
+    /// Returns a string slice borrowed from the document. Asserts that `isString()` is true.
     pub fn string(self: Value) []const u8 {
         std.debug.assert(self.isString());
-        return bridge.jsonz_yyjson_str(self.handle)[0..bridge.jsonz_yyjson_len(self.handle)];
+        return stringAt(self.storage, self.raw());
     }
 
-    /// Returns an array view borrowed from the source document. Asserts that `isArray()` is true.
+    /// Returns an array view borrowed from the document. Asserts that `isArray()` is true.
     pub fn array(self: Value) Array {
         std.debug.assert(self.isArray());
-        return .{ .handle = self.handle };
+        return .{ .storage = self.storage, .index = self.index };
     }
 
-    /// Returns an object view borrowed from the source document. Asserts that `isObject()` is true.
+    /// Returns an object view borrowed from the document. Asserts that `isObject()` is true.
     pub fn object(self: Value) Object {
         std.debug.assert(self.isObject());
-        return .{ .handle = self.handle };
+        return .{ .storage = self.storage, .index = self.index };
     }
 
     /// Looks up an object field, returning `null` when the field is absent.
@@ -128,7 +153,7 @@ pub const Value = struct {
         allocator: std.mem.Allocator,
         options: WriteOptions,
     ) ![]u8 {
-        return writeToSlice(allocator, self, options);
+        return writer_mod.toSlice(allocator, self, options);
     }
 
     /// Serializes this value to `writer` without allocating an output slice.
@@ -137,24 +162,28 @@ pub const Value = struct {
         writer: *std.Io.Writer,
         options: WriteOptions,
     ) !void {
-        return writeToWriter(writer, self, options);
+        return writer_mod.toWriter(writer, self, options);
     }
 };
 
 /// A borrowed view of a JSON array.
 pub const Array = struct {
-    handle: *const bridge.yyjson_val,
+    storage: *const Storage,
+    index: u32,
 
     /// Returns the number of elements.
     pub fn len(self: Array) usize {
-        return bridge.jsonz_yyjson_size(self.handle);
+        return pool_mod.valueLen(self.storage.values[self.index]);
     }
 
     /// Returns the element at `index`, or `null` when the index is out of bounds.
     pub fn get(self: Array, index: usize) ?Value {
         if (index >= self.len()) return null;
-        const value = bridge.jsonz_yyjson_index(self.handle, index) orelse return null;
-        return .{ .handle = value };
+        // A container's children start at the next pool slot.
+        return .{
+            .storage = self.storage,
+            .index = self.index + 1 + @as(u32, @intCast(index)),
+        };
     }
 
     /// Returns the element at `index`. Asserts that `index` is in bounds.
@@ -192,21 +221,40 @@ pub const ObjectEntry = struct {
 
 /// A borrowed view of a JSON object.
 pub const Object = struct {
-    handle: *const bridge.yyjson_val,
+    storage: *const Storage,
+    index: u32,
 
     /// Returns the number of fields.
     pub fn len(self: Object) usize {
-        return bridge.jsonz_yyjson_size(self.handle);
+        return pool_mod.valueLen(self.storage.values[self.index]);
     }
 
-    /// Looks up `key`, returning `null` when it is absent.
+    fn keyAt(self: Object, index: usize) *const pool_mod.Value {
+        return &self.storage.values[self.index + 1 + @as(u32, @intCast(index)) * 2];
+    }
+
+    fn valueAt(self: Object, index: usize) *const pool_mod.Value {
+        return &self.storage.values[self.valueIndex(index)];
+    }
+
+    fn valueIndex(self: Object, index: usize) u32 {
+        return self.index + 2 + @as(u32, @intCast(index)) * 2;
+    }
+
+    /// Looks up `key`, returning `null` when it is absent. Keys are compared by
+    /// content, not by the escaped text they were read from.
     pub fn get(self: Object, key: []const u8) ?Value {
-        const value = bridge.jsonz_yyjson_object_get(
-            self.handle,
-            key.ptr,
-            key.len,
-        ) orelse return null;
-        return .{ .handle = value };
+        const count = self.len();
+        var index: usize = 0;
+        while (index < count) : (index += 1) {
+            const entry_key = self.keyAt(index);
+            if (pool_mod.valueLen(entry_key.*) == key.len and
+                std.mem.eql(u8, stringAt(self.storage, entry_key), key))
+            {
+                return .{ .storage = self.storage, .index = self.valueIndex(index) };
+            }
+        }
+        return null;
     }
 
     /// Returns `key`'s value. Asserts that the field exists.
@@ -230,27 +278,21 @@ pub const ObjectIterator = struct {
     /// Returns the next field, or `null` after the final field.
     pub fn next(self: *ObjectIterator) ?ObjectEntry {
         if (self.index >= self.object.len()) return null;
-
-        const key = bridge.jsonz_yyjson_object_key(
-            self.object.handle,
-            self.index,
-        );
-        const key_len = bridge.jsonz_yyjson_object_key_len(
-            self.object.handle,
-            self.index,
-        );
-        const value = bridge.jsonz_yyjson_object_value(
-            self.object.handle,
-            self.index,
-        ) orelse return null;
+        const storage = self.object.storage;
+        const key = self.object.keyAt(self.index);
+        const value_index = self.object.valueIndex(self.index);
         self.index += 1;
-
         return .{
-            .key = key[0..key_len],
-            .value = .{ .handle = value },
+            .key = stringAt(storage, key),
+            .value = .{ .storage = storage, .index = value_index },
         };
     }
 };
+
+fn stringAt(storage: *const Storage, value: *const pool_mod.Value) []const u8 {
+    const offset: usize = @intCast(value.uni.offset);
+    return storage.input[offset..][0..pool_mod.valueLen(value.*)];
+}
 
 /// Serializes a DOM value to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(
@@ -258,7 +300,7 @@ pub fn toSlice(
     value: Value,
     options: WriteOptions,
 ) ![]u8 {
-    return writeToSlice(allocator, value, options);
+    return writer_mod.toSlice(allocator, value, options);
 }
 
 /// Serializes a DOM value to `writer` without allocating an output slice.
@@ -267,30 +309,5 @@ pub fn toWriter(
     value: Value,
     options: WriteOptions,
 ) !void {
-    return writeToWriter(writer, value, options);
-}
-
-fn writeToSlice(
-    allocator: std.mem.Allocator,
-    value: Value,
-    options: WriteOptions,
-) ![]u8 {
-    var len: usize = 0;
-    const raw = bridge.jsonz_yyjson_write(
-        value.handle,
-        options.pretty,
-        &len,
-    ) orelse return error.InvalidValue;
-    defer std.c.free(raw);
-    return allocator.dupe(u8, raw[0..len]);
-}
-
-fn writeToWriter(
-    writer: *std.Io.Writer,
-    value: Value,
-    options: WriteOptions,
-) !void {
-    const output = try writeToSlice(std.heap.c_allocator, value, options);
-    defer std.heap.c_allocator.free(output);
-    try writer.writeAll(output);
+    return writer_mod.toWriter(writer, value, options);
 }

@@ -4,7 +4,7 @@ A tiny, high-performance JSON library for Zig.
 
 `jsonz.typed` provides native Zig serialization and deserialization for known schemas.
 
-`jsonz.dom` provides a high-performance DOM for arbitrary JSON, backed by [yyjson](https://github.com/ibireme/yyjson).
+`jsonz.dom` provides a high-performance DOM for arbitrary JSON, written in Zig with a compact, [yyjson](https://github.com/ibireme/yyjson)-style value layout.
 
 ## Install
 
@@ -140,13 +140,14 @@ Serialization options:
 
 ### `jsonz.dom`
 
-| API                   | Description                                  |
-| --------------------- | -------------------------------------------- |
-| `dom.parse`           | Parse arbitrary JSON into a `Document`.      |
-| `dom.parseInto`       | Parse using caller-provided DOM storage.     |
-| `dom.parseBufferSize` | Compute the storage required by `parseInto`. |
+| API                   | Description                                             |
+| --------------------- | ------------------------------------------------------- |
+| `dom.parse`           | Parse arbitrary JSON into a `Document`.                 |
+| `dom.parseWith`       | Parse into a `Document` allocated by a given allocator. |
+| `dom.parseInto`       | Parse using caller-provided DOM storage.                |
+| `dom.parseBufferSize` | Compute the storage required by `parseInto`.            |
 
-A `Document` owns its yyjson storage. `Value` instances and returned strings borrow that storage and must not outlive the document.
+A `Document` owns its parsed storage. `Value` instances and returned strings borrow that storage and must not outlive the document.
 
 Object access:
 
@@ -227,4 +228,4 @@ only master release
 
 jsonz is licensed under the [MIT License](LICENSE).
 
-The bundled yyjson source is also MIT licensed; see its [license](src/yyjson/LICENSE).
+The `src/yyjson` directory keeps the MIT-licensed yyjson source that the DOM implementation was ported from; see its [license](src/yyjson/LICENSE).

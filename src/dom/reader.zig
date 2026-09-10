@@ -97,6 +97,13 @@ const Scanned = struct {
     container: ?State,
 };
 
+/// The result of opening a container: where to continue and in which state.
+const Opened = struct {
+    index: u32,
+    pos: usize,
+    state: State,
+};
+
 /// A goto-free port of yyjson's reader finite state machine.
 ///
 /// The mutable cursor and container counters are locals in `run` rather than
@@ -137,25 +144,67 @@ const Reader = struct {
                     }
                 },
                 .array_value => {
-                    if (pos < input.len and input[pos] == ']') {
-                        pos += 1;
-                        const closed = try self.closeContainer(current, count, pos);
-                        state = closed.state;
-                        pos = closed.pos;
-                        current = closed.current;
-                        count = closed.count;
-                        continue;
-                    }
-                    const scanned = try self.scanValue(current, count, pos);
-                    pos = scanned.pos;
-                    if (scanned.container) |container_state| {
-                        current = scanned.index;
-                        count = 0;
-                        state = container_state;
-                    } else {
+                    // Arrays of scalars are the densest shape in real
+                    // documents, so consume a whole run of them here instead of
+                    // bouncing through the state switch for every element.
+                    run: while (true) {
+                        if (pos == input.len) return error.InvalidJson;
+                        const byte = input[pos];
+                        if (byte == ']') {
+                            pos += 1;
+                            const closed = try self.closeContainer(current, count, pos);
+                            state = closed.state;
+                            pos = closed.pos;
+                            current = closed.current;
+                            count = closed.count;
+                            break :run;
+                        }
+                        if (byte == '[' or byte == '{') {
+                            const opened = try self.openContainer(
+                                if (byte == '{') .object else .array,
+                                current,
+                                count,
+                                pos,
+                            );
+                            current = opened.index;
+                            count = 0;
+                            pos = opened.pos;
+                            state = opened.state;
+                            break :run;
+                        }
+                        const scanned = try self.scanScalar(pos);
+                        pos = scanned.pos;
                         count += 1;
-                        state = .array_end;
+                        pos = try self.skipTrivia(pos);
+                        if (pos == input.len) return error.InvalidJson;
+                        switch (input[pos]) {
+                            ',' => {
+                                pos += 1;
+                                pos = try self.skipTrivia(pos);
+                                if (pos < input.len and input[pos] == ']') {
+                                    if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                    pos += 1;
+                                    const closed = try self.closeContainer(current, count, pos);
+                                    state = closed.state;
+                                    pos = closed.pos;
+                                    current = closed.current;
+                                    count = closed.count;
+                                    break :run;
+                                }
+                            },
+                            ']' => {
+                                pos += 1;
+                                const closed = try self.closeContainer(current, count, pos);
+                                state = closed.state;
+                                pos = closed.pos;
+                                current = closed.current;
+                                count = closed.count;
+                                break :run;
+                            },
+                            else => return error.InvalidJson,
+                        }
                     }
+                    continue;
                 },
                 .array_end => {
                     if (pos == input.len) return error.InvalidJson;
@@ -185,20 +234,76 @@ const Reader = struct {
                     }
                 },
                 .object_key => {
-                    if (pos < input.len and input[pos] == '}') {
+                    // As with arrays, run through scalar-valued pairs here so a
+                    // compact object does not re-dispatch per member.
+                    run: while (true) {
+                        if (pos == input.len) return error.InvalidJson;
+                        const byte = input[pos];
+                        if (byte == '}') {
+                            pos += 1;
+                            const closed = try self.closeContainer(current, count, pos);
+                            state = closed.state;
+                            pos = closed.pos;
+                            current = closed.current;
+                            count = closed.count;
+                            break :run;
+                        }
+                        if (byte != '"') return error.InvalidJson;
+                        const key = try self.scanString(pos);
+                        pos = key.pos;
+                        count += 1;
+                        pos = try self.skipTrivia(pos);
+                        if (pos == input.len or input[pos] != ':') return error.InvalidJson;
                         pos += 1;
-                        const closed = try self.closeContainer(current, count, pos);
-                        state = closed.state;
-                        pos = closed.pos;
-                        current = closed.current;
-                        count = closed.count;
-                        continue;
+                        pos = try self.skipTrivia(pos);
+                        if (pos == input.len) return error.InvalidJson;
+                        const value_byte = input[pos];
+                        if (value_byte == '[' or value_byte == '{') {
+                            const opened = try self.openContainer(
+                                if (value_byte == '{') .object else .array,
+                                current,
+                                count,
+                                pos,
+                            );
+                            current = opened.index;
+                            count = 0;
+                            pos = opened.pos;
+                            state = opened.state;
+                            break :run;
+                        }
+                        const value = try self.scanScalar(pos);
+                        pos = value.pos;
+                        count += 1;
+                        pos = try self.skipTrivia(pos);
+                        if (pos == input.len) return error.InvalidJson;
+                        switch (input[pos]) {
+                            ',' => {
+                                pos += 1;
+                                pos = try self.skipTrivia(pos);
+                                if (pos < input.len and input[pos] == '}') {
+                                    if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                    pos += 1;
+                                    const closed = try self.closeContainer(current, count, pos);
+                                    state = closed.state;
+                                    pos = closed.pos;
+                                    current = closed.current;
+                                    count = closed.count;
+                                    break :run;
+                                }
+                            },
+                            '}' => {
+                                pos += 1;
+                                const closed = try self.closeContainer(current, count, pos);
+                                state = closed.state;
+                                pos = closed.pos;
+                                current = closed.current;
+                                count = closed.count;
+                                break :run;
+                            },
+                            else => return error.InvalidJson,
+                        }
                     }
-                    if (pos == input.len or input[pos] != '"') return error.InvalidJson;
-                    const scanned = try self.scanString(pos);
-                    pos = scanned.pos;
-                    count += 1;
-                    state = .object_colon;
+                    continue;
                 },
                 .object_colon => {
                     if (pos == input.len or input[pos] != ':') return error.InvalidJson;
@@ -252,12 +357,30 @@ const Reader = struct {
 
     /// Scans one value: a scalar value, or a container header that the caller
     /// must descend into.
+    /// Scans one scalar value; containers are handled by the state machine.
+    inline fn scanScalar(self: *Reader, pos: usize) Error!Scan {
+        switch (self.input[pos]) {
+            '"' => return self.scanString(pos),
+            't' => return self.scanLiteral(pos, "true", .bool, pool_mod.true_value, 1),
+            'f' => return self.scanLiteral(pos, "false", .bool, pool_mod.false_value, 0),
+            'n' => return self.scanLiteral(pos, "null", .null, .none, 0),
+            '-', '0'...'9' => return self.scanNumber(pos),
+            else => return error.InvalidJson,
+        }
+    }
+
     inline fn scanValue(self: *Reader, parent: ?u32, count: usize, pos: usize) Error!Scanned {
         if (pos == self.input.len) return error.InvalidJson;
         const byte = self.input[pos];
         switch (byte) {
-            '[' => return self.openContainer(.array, parent, count, pos),
-            '{' => return self.openContainer(.object, parent, count, pos),
+            '[' => {
+                const opened = try self.openContainer(.array, parent, count, pos);
+                return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
+            },
+            '{' => {
+                const opened = try self.openContainer(.object, parent, count, pos);
+                return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
+            },
             '"' => {
                 const scanned = try self.scanString(pos);
                 return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
@@ -288,7 +411,7 @@ const Reader = struct {
         parent: ?u32,
         count: usize,
         pos: usize,
-    ) Error!Scanned {
+    ) Error!Opened {
         const index = try self.append(.{
             .tag = pool_mod.makeTag(value_type, .none, 0),
             .uni = .{ .uint = 0 },
@@ -308,7 +431,7 @@ const Reader = struct {
         return .{
             .index = index,
             .pos = pos + 1,
-            .container = if (value_type == .object) .object_key else .array_value,
+            .state = if (value_type == .object) .object_key else .array_value,
         };
     }
 
@@ -365,7 +488,7 @@ const Reader = struct {
     /// An integer that fits in `u64`/`i64` is kept exact; anything with a
     /// fraction or exponent, or that overflows, is converted to a double, the
     /// same demotion yyjson does.
-    fn scanNumber(self: *Reader, start: usize) Error!Scan {
+    inline fn scanNumber(self: *Reader, start: usize) Error!Scan {
         const input = self.input;
         var pos = start;
 
@@ -441,8 +564,7 @@ const Reader = struct {
             }
         }
 
-        const number = float.parseNumber(f64, input, start) catch return error.InvalidJson;
-        if (!std.math.isFinite(number.value)) return error.InvalidJson;
+        const number = try parseReal(input, start);
         return .{
             .index = try self.append(.{
                 .tag = pool_mod.makeTag(.number, .real, 0),
@@ -459,7 +581,7 @@ const Reader = struct {
     /// that contains a quote, escape, control byte, or non-ASCII byte is walked
     /// byte by byte before the vector scan resumes, so non-ASCII text does not
     /// pay for a vector reload per character.
-    fn scanString(self: *Reader, start: usize) Error!Scan {
+    inline fn scanString(self: *Reader, start: usize) Error!Scan {
         const input = self.input;
         const text_start = start + 1;
         var scan = text_start;
@@ -727,6 +849,23 @@ const Reader = struct {
         return error.InvalidJson;
     }
 };
+
+/// A real number read from the input.
+const Real = struct {
+    value: f64,
+    end: usize,
+};
+
+/// Converts a scanned real to `f64`.
+///
+/// This is `noinline` on purpose: inlining the float converter into
+/// `scanNumber` gives every integer the converter's large stack frame and
+/// register spills, which costs more than the call.
+noinline fn parseReal(input: []const u8, start: usize) Error!Real {
+    const number = float.parseNumber(f64, input, start) catch return error.InvalidJson;
+    if (!std.math.isFinite(number.value)) return error.InvalidJson;
+    return .{ .value = number.value, .end = number.end };
+}
 
 fn readWithOptions(input: []u8, options: Options, allocator: std.mem.Allocator) !struct { Pool, u32 } {
     var pool = try Pool.init(allocator, input.len, false);

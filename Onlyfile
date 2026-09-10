@@ -59,7 +59,7 @@ group master {
 [pass] Formatting complete.
 [fail] Formatting failed.
 fmt():
-    zig fmt src tests bench build.zig build.zig.zon
+    zig fmt src fuzzy bench build.zig build.zig.zon
 
 [help] Clean cache, build output and packages
 [pass] Clean complete.

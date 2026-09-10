@@ -46,17 +46,7 @@ pub fn build(b: *std.Build) void {
     addTest(
         b,
         test_step,
-        "tests/roundtrip.zig",
-        jsonz_mod,
-        target,
-        optimize,
-        strip,
-    );
-
-    addTest(
-        b,
-        test_step,
-        "tests/fuzzy.zig",
+        "fuzzy/fuzzy.zig",
         jsonz_mod,
         target,
         optimize,

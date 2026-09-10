@@ -18,7 +18,7 @@ jobs:
           version: 0.16.0
 
       - name: Check formatting
-        run: zig fmt --check src tests build.zig
+        run: zig fmt --check src fuzzy build.zig
 
   check:
     name: Zig ${{ matrix.zig }}

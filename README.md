@@ -29,6 +29,7 @@ const jsonz = b.dependency("jsonz", .{
 });
 
 exe.root_module.addImport("jsonz", jsonz.module("jsonz"));
+exe.root_module.link_libc = true; // recommended: faster when parsing many documents in one process
 ```
 
 ## Quick Start
@@ -146,6 +147,11 @@ Serialization options:
 | `dom.parseWith`       | Parse into a `Document` allocated by a given allocator. |
 | `dom.parseInto`       | Parse using caller-provided DOM storage.                |
 | `dom.parseBufferSize` | Compute the storage required by `parseInto`.            |
+
+`dom.parse` allocates with `std.heap.c_allocator` when libc is linked and
+`std.heap.smp_allocator` otherwise; the former reuses the heap across parses.
+Pass an allocator to `parseWith` to choose a different one, or reuse a buffer
+through `parseInto` to avoid allocating on every parse.
 
 A `Document` owns its parsed storage. `Value` instances and returned strings borrow that storage and must not outlive the document.
 

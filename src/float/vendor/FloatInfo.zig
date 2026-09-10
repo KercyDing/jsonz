@@ -71,7 +71,7 @@ pub fn from(comptime T: type) Self {
             .mantissa_explicit_bits = std.math.floatFractionalBits(T),
             .infinite_power = 0x1f,
             // Eisel-Lemire
-            .smallest_power_of_ten = -26, // TODO: refine, fails one test
+            .smallest_power_of_ten = -26, // upstream TODO; this library's f16 tests pass
             .largest_power_of_ten = 4,
             .minimum_exponent = -15,
             // w >= (2m+1) * 5^-q and w < 2^64

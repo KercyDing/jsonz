@@ -298,7 +298,7 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 /// `\u00XX`; every other byte, including DEL and any valid multi-byte sequence,
 /// is copied through.
 inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
-    const offset: usize = @intCast(item.uni.offset);
+    const offset: usize = @intCast(item.payload.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
 
     // Worst case is six bytes per input byte, plus the quotes.
@@ -366,14 +366,14 @@ inline fn writeEscape(buffer: *Buffer, byte: u8) void {
 
 inline fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
     switch (pool_mod.valueSubtype(item)) {
-        .real => try writeReal(buffer, item.uni.float),
+        .real => try writeReal(buffer, item.payload.float),
         .one => {
             try buffer.reserve(21);
-            writeSigned(buffer, item.uni.int);
+            writeSigned(buffer, item.payload.int);
         },
         .none => {
             try buffer.reserve(20);
-            writeUnsigned(buffer, item.uni.uint);
+            writeUnsigned(buffer, item.payload.uint);
         },
     }
 }

@@ -2,14 +2,14 @@ const std = @import("std");
 
 /// The JSON value type, stored in the low three bits of a tag.
 pub const Type = enum(u3) {
+    /// Only the default tag of an unset value uses this.
     none = 0,
-    raw = 1,
-    null = 2,
-    bool = 3,
-    number = 4,
-    string = 5,
-    array = 6,
-    object = 7,
+    null = 1,
+    bool = 2,
+    number = 3,
+    string = 4,
+    array = 5,
+    object = 6,
 };
 
 /// The value subtype, stored in the next two bits of a tag.
@@ -60,7 +60,7 @@ pub const Payload = extern union {
 /// One 16-byte DOM value: a tag and a payload.
 pub const Value = extern struct {
     tag: Tag = .{ .type = .none },
-    uni: Payload = .{ .uint = 0 },
+    payload: Payload = .{ .uint = 0 },
 };
 
 /// The size of one value.
@@ -101,7 +101,7 @@ pub fn indexAtOffset(from: u32, offset: u64) u32 {
 /// Value storage for one document.
 ///
 /// Values live in one contiguous, depth-first array: a container's children
-/// start at the next index, and `uni.offset` skips to the value after a
+/// start at the next index, and `payload.offset` skips to the value after a
 /// container's subtree. A pool is either owned by an allocator and can grow, or
 /// backed by caller storage and fails with `error.OutOfMemory` when it is full.
 pub const Pool = struct {
@@ -173,15 +173,15 @@ test "value layout" {
     try std.testing.expectEqual(@as(usize, 16), @sizeOf(Value));
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Value));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Value, "tag"));
-    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Value, "uni"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Value, "payload"));
 }
 
 test "tag fields" {
-    const value = Value{ .tag = makeTag(.number, .real, 42), .uni = .{ .float = 1.5 } };
+    const value = Value{ .tag = makeTag(.number, .real, 42), .payload = .{ .float = 1.5 } };
     try std.testing.expectEqual(Type.number, valueType(value));
     try std.testing.expectEqual(Subtype.real, valueSubtype(value));
     try std.testing.expectEqual(@as(usize, 42), valueLen(value));
-    try std.testing.expectEqual(@as(f64, 1.5), value.uni.float);
+    try std.testing.expectEqual(@as(f64, 1.5), value.payload.float);
 }
 
 test "container offsets" {
@@ -196,7 +196,7 @@ test "pool growth" {
     var pool = try Pool.init(std.testing.allocator, 0, false);
     defer pool.deinit();
     for (0..64) |i| {
-        _ = try pool.append(.{ .tag = makeTag(.null, .none, 0), .uni = .{ .uint = i } });
+        _ = try pool.append(.{ .tag = makeTag(.null, .none, 0), .payload = .{ .uint = i } });
     }
     try std.testing.expectEqual(@as(usize, 64), pool.items().len);
 }
@@ -206,7 +206,7 @@ test "fixed pool" {
     var pool = Pool.initFixed(std.mem.asBytes(&storage));
     try std.testing.expectEqual(@as(usize, 4), pool.buffer.len);
     for (0..4) |_| {
-        _ = try pool.append(.{ .tag = makeTag(.null, .none, 0), .uni = .{ .uint = 0 } });
+        _ = try pool.append(.{ .tag = makeTag(.null, .none, 0), .payload = .{ .uint = 0 } });
     }
     try std.testing.expectError(error.OutOfMemory, pool.append(.{ .tag = makeTag(.null, .none, 0) }));
 }

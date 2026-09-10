@@ -103,19 +103,19 @@ pub const Value = struct {
     /// Returns the signed integer value. Asserts that `isInt()` is true.
     pub fn int(self: Value) i64 {
         std.debug.assert(self.isInt());
-        return self.raw().uni.int;
+        return self.raw().payload.int;
     }
 
     /// Returns the unsigned integer value. Asserts that `isUint()` is true.
     pub fn uint(self: Value) u64 {
         std.debug.assert(self.isUint());
-        return self.raw().uni.uint;
+        return self.raw().payload.uint;
     }
 
     /// Returns the floating-point value. Asserts that `isFloat()` is true.
     pub fn float(self: Value) f64 {
         std.debug.assert(self.isFloat());
-        return self.raw().uni.float;
+        return self.raw().payload.float;
     }
 
     /// Returns a string slice borrowed from the document. Asserts that `isString()` is true.
@@ -290,7 +290,7 @@ pub const ObjectIterator = struct {
 };
 
 fn stringAt(storage: *const Storage, value: *const pool_mod.Value) []const u8 {
-    const offset: usize = @intCast(value.uni.offset);
+    const offset: usize = @intCast(value.payload.offset);
     return storage.input[offset..][0..pool_mod.valueLen(value.*)];
 }
 

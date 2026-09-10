@@ -456,7 +456,7 @@ const Reader = struct {
                 .none,
                 count + 1,
             );
-            self.pool.atMut(index).uni.offset = pool_mod.byteOffset(parent_index, index);
+            self.pool.atMut(index).payload.offset = pool_mod.byteOffset(parent_index, index);
         }
         return .{
             .index = index,
@@ -468,13 +468,13 @@ const Reader = struct {
     inline fn closeContainer(self: *Reader, container: u32, count: usize, pos: usize) Error!Closed {
         const value = self.pool.at(container).*;
         const value_type = pool_mod.valueType(value);
-        const parent = container - @as(u32, @intCast(value.uni.offset / pool_mod.value_size));
+        const parent = container - @as(u32, @intCast(value.payload.offset / pool_mod.value_size));
         const len = if (value_type == .object) count / 2 else count;
         // The offset points one value past the last child, so that walking
         // siblings can skip this whole subtree.
         self.pool.atMut(container).* = .{
             .tag = pool_mod.makeTag(value_type, .none, len),
-            .uni = .{ .offset = pool_mod.byteOffset(container, @intCast(self.pool.len)) },
+            .payload = .{ .offset = pool_mod.byteOffset(container, @intCast(self.pool.len)) },
         };
         if (parent == container) {
             const end = try self.skipTrivia(pos);
@@ -821,15 +821,15 @@ const Reader = struct {
     ///
     /// Passing them separately keeps the 16-byte `Value` out of the caller's
     /// stack frame.
-    inline fn append(self: *Reader, tag: pool_mod.Tag, uni: pool_mod.Payload) Error!u32 {
+    inline fn append(self: *Reader, tag: pool_mod.Tag, payload: pool_mod.Payload) Error!u32 {
         const pool = self.pool;
         if (@as(usize, pool.len) == pool.buffer.len) {
-            return pool.append(.{ .tag = tag, .uni = uni }) catch return error.OutOfMemory;
+            return pool.append(.{ .tag = tag, .payload = payload }) catch return error.OutOfMemory;
         }
         const index: u32 = @intCast(pool.len);
         const slot = &pool.buffer[pool.len];
         slot.tag = tag;
-        slot.uni = uni;
+        slot.payload = payload;
         pool.len += 1;
         return index;
     }
@@ -929,7 +929,7 @@ test "unicode escapes" {
         const value = result[0].at(result[1]).*;
         try std.testing.expectEqualStrings(
             case[1],
-            result[2][@intCast(value.uni.offset)..][0..pool_mod.valueLen(value)],
+            result[2][@intCast(value.payload.offset)..][0..pool_mod.valueLen(value)],
         );
     }
 }
@@ -980,7 +980,7 @@ test "number subtypes" {
         const value = result[0].at(result[1]).*;
         try std.testing.expectEqual(Type.number, pool_mod.valueType(value));
         try std.testing.expectEqual(case.subtype, pool_mod.valueSubtype(value));
-        try std.testing.expectEqual(case.bits, value.uni.uint);
+        try std.testing.expectEqual(case.bits, value.payload.uint);
     }
 }
 

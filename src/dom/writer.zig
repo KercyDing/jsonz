@@ -41,11 +41,9 @@ inline fn escapeMask(bytes: EscapeVector) u32 {
 
 /// Copies `len` bytes from `src` to `dest`.
 ///
-/// What the writer copies is mostly short: escape sequences, integer digits,
-/// and the plain runs between escapes. Routing those through `@memcpy` costs a
-/// call and a branch chain that hands a handful of bytes to the generic path,
-/// so anything under 32 bytes is copied with overlapping fixed-size moves that
-/// stay inline.
+/// The writer mostly copies short runs — escape sequences, integer digits, and
+/// the plain gaps between escapes — so anything under 32 bytes is copied with
+/// overlapping fixed-size moves instead of a call into `@memcpy`.
 inline fn copyBytes(dest: [*]u8, src: [*]const u8, len: usize) void {
     @setRuntimeSafety(false);
     if (len >= 32) {
@@ -318,10 +316,8 @@ inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) 
 
 /// Writes `bytes` between quotes, escaping what JSON requires.
 ///
-/// A string that came in with an escape sequence has to be re-scanned, and on
-/// documents with long escaped text that scan is most of the writer's work, so
-/// it runs 32 bytes at a time and only falls back to a byte loop for the last
-/// partial chunk.
+/// A string that came in with an escape sequence is re-scanned 32 bytes at a
+/// time, falling back to a byte loop for the last partial chunk.
 fn writeEscaped(buffer: *Buffer, bytes: []const u8) void {
     // Bytes already copied through: everything before `index` that did not need
     // escaping is still pending, so the copy happens once per escape instead of

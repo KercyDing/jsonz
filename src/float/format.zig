@@ -1,19 +1,13 @@
 //! Shortest round-trip decimal formatting, used for JSON output.
 //!
-//! `std.fmt`'s `{d}` renders floats with Ryu, and spends nearly as long laying
-//! the digits out as it does finding them. This module produces the same text
-//! with the Schubfach algorithm for the digits and an emitter that writes them
-//! in chunks of eight and places the decimal point in one pass.
-//!
-//! Only `f32` and `f64` are handled; anything else reports
-//! `error.UnsupportedType` so the caller can fall back to `std.fmt`. Zero is
-//! formatted here, but NaN and infinities report `error.UnsupportedValue`
+//! Produces the same text as `std.fmt`'s `{d}` with the Schubfach algorithm,
+//! writing the digits eight at a time and placing the decimal point in one pass.
+//! Only `f32` and `f64` are handled: anything else reports
+//! `error.UnsupportedType`, and NaN or infinity `error.UnsupportedValue`,
 //! because JSON has no spelling for them.
 //!
 //! The power-of-ten table is generated at comptime and checked against the
-//! Eisel-Lemire table the parser uses: normalising `10^k` and `5^k` to 128 bits
-//! produces the same bits, so the two tables are the same data over a shifted
-//! exponent range.
+//! Eisel-Lemire table the parser uses.
 
 const std = @import("std");
 const eisel_lemire = @import("vendor/convert_eisel_lemire.zig");

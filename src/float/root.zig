@@ -1,16 +1,11 @@
-//! JSON numbers that are floating point: reading them in, and writing them out.
+//! Reading and writing JSON floating-point numbers.
 //!
-//! Both directions go straight to the decimal representation they need instead
-//! of routing through `std.fmt` twice:
-//!
-//! - `parseNumber` scans a number once, accumulating its significant digits and
-//!   decimal exponent, and converts those with Eisel-Lemire.
-//! - `formatNumber` writes the shortest decimal that round-trips, with
-//!   Schubfach.
-//!
-//! Neither changes the result: `parseNumber` falls back to
-//! `std.fmt.parseFloat`, `formatNumber` to `std.fmt`'s `{d}`, and the tests
-//! check both against those references.
+//! `parseNumber` scans a number once and converts its digits with Eisel-Lemire;
+//! `formatNumber` writes the shortest decimal that round-trips, with Schubfach.
+//! Both agree with `std.fmt`: the parser falls back to `std.fmt.parseFloat` for
+//! anything it cannot prove, and `formatNumber` reports
+//! `error.UnsupportedType` for types it does not handle so the caller can fall
+//! back itself. The tests check both against those references.
 
 const parse = @import("parse.zig");
 const format = @import("format.zig");

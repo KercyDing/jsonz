@@ -18,7 +18,7 @@ pub const Parsed = deserialize.Parsed;
 pub const parse = deserialize.parse;
 /// Parses JSON while borrowing unescaped strings from the input.
 pub const parseBorrowed = deserialize.parseBorrowed;
-/// Parses JSON using caller-provided allocation storage.
+/// Parses JSON into caller-provided storage.
 pub const parseInto = deserialize.parseInto;
 
 /// Serializes a Zig value to an allocated JSON slice.

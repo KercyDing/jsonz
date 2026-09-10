@@ -148,21 +148,21 @@ pub const Document = struct {
     }
 };
 
-/// Parses JSON into an owned DOM document using a default allocator.
+/// The allocator `parse` uses on its own: `std.heap.c_allocator` when libc is
+/// linked, and `std.heap.smp_allocator` otherwise.
 ///
-/// Use `parseWith` to control the allocator, or `parseInto` to parse without
-/// any allocator at all. Call `Document.deinit` to release the result.
-/// The allocator `parse` uses on its own.
-///
-/// When the program links libc this is `std.heap.c_allocator`: parsing allocates
-/// and frees a whole document each time, and malloc reuses those blocks while
-/// Zig's page-based allocator returns them to the OS and faults them back in on
-/// the next parse. Without libc it falls back to `std.heap.smp_allocator`.
+/// Parsing allocates and frees a whole document each time. Malloc reuses those
+/// blocks, while Zig's page-based allocator returns them to the OS and faults
+/// them back in on the next parse, so libc is the better default.
 pub const default_allocator: std.mem.Allocator = if (builtin.link_libc)
     std.heap.c_allocator
 else
     std.heap.smp_allocator;
 
+/// Parses JSON into an owned DOM document using `default_allocator`.
+///
+/// Use `parseWith` to choose the allocator, or `parseInto` to parse without
+/// one. Call `Document.deinit` to release the result.
 pub fn parse(input: []const u8, options: ParseOptions) ParseError!Document {
     return parseWith(default_allocator, input, options);
 }

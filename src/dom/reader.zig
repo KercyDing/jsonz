@@ -24,11 +24,8 @@ inline fn specialMask(bytes: ScanVector) u32 {
 
 /// True for the four JSON whitespace bytes.
 ///
-/// Skipping whitespace is the hottest loop in the reader on indented documents.
-/// A table lookup keeps it to one load, one test and one branch per byte, which
-/// the branch predictor can run ahead of; comparing the byte against each
-/// whitespace value instead takes several branches per byte and twice the
-/// cycles.
+/// A table lookup keeps the skip loop to one load, one test and one branch per
+/// byte, which the branch predictor runs ahead of.
 const space_table: [256]bool = blk: {
     var table: [256]bool = @splat(false);
     for ([_]u8{ ' ', '\t', '\n', '\r' }) |byte| table[byte] = true;
@@ -67,16 +64,12 @@ pub const Options = struct {
 
 pub const Error = error{ InvalidJson, OutOfMemory };
 
-/// Parses the JSON in `input` into `pool` and returns the root value index.
-///
-/// `input` must stay mutable and alive as long as the pool is read: string
-/// escape sequences are decoded in place, and every string value stores a byte
-/// offset into `input`.
 /// Parses the JSON in `buffer[0..end]` into `pool` and returns the root index.
 ///
-/// `buffer` must have four readable zero bytes at `buffer[end..end + 4]`; the
-/// reader relies on them, so its hot loops can skip bounds checks. String
-/// escape sequences are decoded in place inside `buffer`.
+/// `buffer` must stay mutable and alive as long as the pool is read, because
+/// escape sequences are decoded in place and every string value stores a byte
+/// offset into it. It must also have four readable zero bytes at
+/// `buffer[end..end + 4]`; the reader relies on them to skip bounds checks.
 pub fn read(pool: *Pool, buffer: []u8, end: usize, options: Options) Error!u32 {
     var reader: Reader = .{
         .input = buffer[0 .. end + 4],
@@ -135,9 +128,8 @@ const Opened = struct {
 
 /// The reader's finite state machine.
 ///
-/// The mutable cursor and container counters are locals in `run` rather than
-/// fields, so writes to the input buffer and value pool cannot force LLVM to
-/// spill and reload them on every value.
+/// The cursor and container counters are locals in `run`, not fields: writing to
+/// the input and the pool would otherwise force a reload on every value.
 const Reader = struct {
     /// The padded input; `self.end == end + 4`.
     input: []u8,
@@ -571,11 +563,9 @@ const Reader = struct {
 
     /// Reads a string value, decoding escapes in place.
     ///
-    /// Strings without escapes take a scan-only fast path that never writes to
-    /// the input buffer. Plain 32-byte chunks are skipped with SIMD; a chunk
-    /// that contains a quote, escape, control byte, or non-ASCII byte is walked
-    /// byte by byte before the vector scan resumes, so non-ASCII text does not
-    /// pay for a vector reload per character.
+    /// Strings without escapes take a scan-only path. Plain 32-byte chunks are
+    /// skipped with SIMD; a chunk holding a quote, escape, control byte, or
+    /// non-ASCII byte is walked byte by byte before the vector scan resumes.
     inline fn scanString(self: *Reader, start: usize) Error!Scan {
         const input = self.input;
         const text_start = start + 1;
@@ -699,12 +689,11 @@ const Reader = struct {
         }
     }
 
-    /// Advances over a run of UTF-8 sequences at `pos`, returning the offset of
-    /// the first ASCII byte or the end of the run.
+    /// Advances over a run of UTF-8 sequences, returning the offset of the first
+    /// ASCII byte or the end of the run.
     ///
-    /// Mask-and-pattern validation: one little-endian 32-bit
-    /// load checks a whole sequence, so runs of same-length sequences (common
-    /// for CJK text) move several bytes per iteration.
+    /// One little-endian 32-bit load validates a whole sequence, so runs of
+    /// same-length sequences move several bytes per iteration.
     fn skipUtf8(self: *Reader, start: usize) Error!usize {
         const input = self.input;
         var pos = start;
@@ -828,12 +817,10 @@ const Reader = struct {
         return (@as(u21, a) << 12) | (@as(u21, b) << 8) | (@as(u21, c) << 4) | d;
     }
 
-    /// Appends a value; the common case is inlined and only growth is a call.
-    /// Appends a value given as its two words.
+    /// Appends a value given as its two words; only growth is a call.
     ///
-    /// Passing tag and payload separately keeps the 16-byte `Value` out of the
-    /// caller's stack frame; building it inline was the hottest instruction
-    /// pair in the reader.
+    /// Passing them separately keeps the 16-byte `Value` out of the caller's
+    /// stack frame.
     inline fn append(self: *Reader, tag: pool_mod.Tag, uni: pool_mod.Payload) Error!u32 {
         const pool = self.pool;
         if (@as(usize, pool.len) == pool.buffer.len) {

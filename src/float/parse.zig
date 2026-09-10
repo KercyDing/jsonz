@@ -1,13 +1,10 @@
 //! Fused JSON number scanning and floating-point conversion.
 //!
-//! Scans a number once, accumulating its significant digits and decimal
-//! exponent, then converts those directly. Delegating the conversion to
-//! `std.fmt.parseFloat` would scan the digits a second time: it only accepts a
-//! complete slice, and the `(mantissa, exponent)` form its converter consumes
-//! is private.
-//!
-//! The conversion code under `vendor/` is vendored from the Zig standard
-//! library.
+//! A number is scanned once into significant digits and a decimal exponent, then
+//! converted from those directly; `std.fmt.parseFloat` would scan the digits a
+//! second time. The conversion follows Eisel-Lemire and falls back to
+//! `std.fmt.parseFloat` when it cannot prove the result. The code under
+//! `vendor/` is copied from the Zig standard library.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -195,13 +192,10 @@ pub fn parse(comptime T: type, input: []const u8, start: usize) Error!Result(T) 
 
 /// Consumes a run of decimal digits.
 ///
-/// Up to `max_digits` significant digits are accumulated into `mantissa`; the
-/// rest only count towards `dropped`, which the caller turns into a decimal
-/// exponent. Eight digits are consumed at a time while a whole chunk still fits
-/// in the accumulator.
-///
-/// `mantissa` must be nonzero on entry so that no digit in the run can be an
-/// insignificant leading zero.
+/// Up to `max_digits` significant digits accumulate into `mantissa`; the rest
+/// count towards `dropped`, which the caller turns into a decimal exponent.
+/// `mantissa` must be nonzero so no digit in the run is an insignificant
+/// leading zero.
 inline fn scanDigits(
     input: []const u8,
     start: usize,

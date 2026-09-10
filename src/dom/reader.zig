@@ -22,6 +22,19 @@ inline fn specialMask(bytes: ScanVector) u32 {
     return @bitCast(quote | escape | control | high);
 }
 
+/// True for the four JSON whitespace bytes.
+///
+/// Skipping whitespace is the hottest loop in the reader on indented documents.
+/// A table lookup keeps it to one load, one test and one branch per byte, which
+/// the branch predictor can run ahead of; comparing the byte against each
+/// whitespace value instead takes several branches per byte and twice the
+/// cycles.
+const space_table: [256]bool = blk: {
+    var table: [256]bool = @splat(false);
+    for ([_]u8{ ' ', '\t', '\n', '\r' }) |byte| table[byte] = true;
+    break :blk table;
+};
+
 /// Hex digit value, or `0xFF` for a byte that is not a hex digit.
 const hex_digits: [256]u8 = blk: {
     var table: [256]u8 = @splat(0xFF);
@@ -829,16 +842,8 @@ const Reader = struct {
         const input = self.input;
         var pos = start;
         if (!self.options.allow_comments) {
-            // Every JSON whitespace byte is `<= ' '`, so one comparison rejects
-            // the common case of a compact document.
-            while (true) {
-                const byte = input[pos];
-                if (byte > ' ') return pos;
-                switch (byte) {
-                    ' ', '\t', '\n', '\r' => pos += 1,
-                    else => return pos,
-                }
-            }
+            while (space_table[input[pos]]) pos += 1;
+            return pos;
         }
         // A zero padding byte is not whitespace, so this always terminates.
         while (true) {
@@ -986,6 +991,58 @@ test "number subtypes" {
 test "invalid numbers" {
     const cases = [_][]const u8{
         "01", "-", "1.", ".1", "1e", "1e+", "+1", "1e309",
+    };
+    for (cases) |case| {
+        try std.testing.expectError(
+            error.InvalidJson,
+            readWithOptions(@constCast(case), .{}, std.testing.allocator),
+        );
+    }
+}
+
+test "whitespace between tokens" {
+    // Every whitespace byte, alone and in runs, between every pair of tokens.
+    const runs = [_][]const u8{
+        " ",          "  ",               "   ",                              "    ",
+        "     ",      "      ",           "       ",                          "        ",
+        "         ",  "                ", "                                ", "                                ",
+        "\t",         "\n",               "\r",                               " \t\r\n",
+        "\n        ", "        \n",       "\n\t\r  \n\t\r ",
+    };
+    const expected = "{\"a\":[1,2],\"b\":\"x\"}";
+    for (runs) |run| {
+        // Whitespace is legal around every token, so thread one run through all
+        // of them.
+        const pieces = [_][]const u8{
+            run, "{",     run, "\"a\"", run, ":", run, "[", run,     "1", run,
+            ",", run,     "2", run,     "]", run, ",", run, "\"b\"", run, ":",
+            run, "\"x\"", run, "}",     run,
+        };
+        var buffer: [512]u8 = undefined;
+        var len: usize = 0;
+        for (pieces) |piece| {
+            @memcpy(buffer[len..][0..piece.len], piece);
+            len += piece.len;
+        }
+        const input = buffer[0..len];
+
+        var result = try readWithOptions(input, .{}, std.testing.allocator);
+        defer result[0].deinit();
+        defer std.testing.allocator.free(result[2]);
+        // Root object + 2 keys + array + 2 numbers + string = 7 values.
+        try std.testing.expectEqual(@as(usize, 7), result[0].items().len);
+
+        var document = try @import("document.zig").parseWith(std.testing.allocator, input, .{});
+        defer document.deinit();
+        const output = try document.toSlice(std.testing.allocator, .{});
+        defer std.testing.allocator.free(output);
+        try std.testing.expectEqualStrings(expected, output);
+    }
+}
+
+test "control bytes are not whitespace" {
+    const cases = [_][]const u8{
+        "[1,\x011]", "[1,\x0b1]", "{\"a\"\x00:1}", "[1,\x1f2]",
     };
     for (cases) |case| {
         try std.testing.expectError(

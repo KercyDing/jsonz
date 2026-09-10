@@ -485,7 +485,7 @@ const Reader = struct {
                 if (byte == '\\') break :scan_loop;
                 if (byte < 0x20) return error.InvalidJson;
                 if (byte >= 0x80) {
-                    scan += try self.utf8SequenceLen(scan);
+                    scan = try self.skipUtf8(scan);
                 } else {
                     scan += 1;
                 }
@@ -553,20 +553,68 @@ const Reader = struct {
                     },
                     0x00...0x1f => return error.InvalidJson,
                     else => {
-                        const seq_len = try self.utf8SequenceLen(pos);
-                        // `write` never passes `pos`, so copy forwards.
+                        // Validate the whole multi-byte run, then move it as one
+                        // span; `write` never passes `pos`, so copy forwards.
+                        const next = try self.skipUtf8(pos);
+                        const len = next - pos;
                         std.mem.copyForwards(
                             u8,
-                            input[write..][0..seq_len],
-                            input[pos..][0..seq_len],
+                            input[write..][0..len],
+                            input[pos..][0..len],
                         );
-                        write += seq_len;
-                        pos += seq_len;
+                        write += len;
+                        pos = next;
                     },
                 }
             }
             if (pos >= input.len) return error.InvalidJson;
         }
+    }
+
+    /// Advances over a run of UTF-8 sequences at `pos`, returning the offset of
+    /// the first ASCII byte or the end of the run.
+    ///
+    /// This is yyjson's mask-and-pattern validation: one little-endian 32-bit
+    /// load checks a whole sequence, so runs of same-length sequences (common
+    /// for CJK text) move several bytes per iteration.
+    fn skipUtf8(self: *Reader, start: usize) Error!usize {
+        const input = self.input;
+        var pos = start;
+        while (pos + 4 <= input.len) {
+            const u = std.mem.readInt(u32, input[pos..][0..4], .little);
+            // 3-byte sequence [1110xxxx 10xxxxxx 10xxxxxx], rejecting overlong
+            // and surrogate halves.
+            if (u & 0x00C0C0F0 == 0x008080E0) {
+                const required = u & 0x0000200F;
+                if (required == 0 or required == 0x0000200D) return error.InvalidJson;
+                pos += 3;
+                continue;
+            }
+            // 2-byte sequence [110xxxxx 10xxxxxx], rejecting overlong C0/C1.
+            if (u & 0x0000C0E0 == 0x000080C0) {
+                if (u & 0x0000001E == 0) return error.InvalidJson;
+                pos += 2;
+                continue;
+            }
+            // 4-byte sequence [11110xxx 10xxxxxx 10xxxxxx 10xxxxxx], restricted
+            // to U+10000..U+10FFFF. It is valid when either requirement clears.
+            if (u & 0xC0C0C0F8 == 0x808080F0) {
+                const required = u & 0x00003007;
+                if (required == 0 or (required & 0x04 != 0 and required & 0x00003003 != 0)) {
+                    return error.InvalidJson;
+                }
+                pos += 4;
+                continue;
+            }
+            if (u & 0x80 == 0) return pos;
+            return error.InvalidJson;
+        }
+        // Fewer than four bytes remain: validate one sequence at a time.
+        while (pos < input.len) {
+            if (input[pos] < 0x80) return pos;
+            pos += try self.utf8SequenceLen(pos);
+        }
+        return pos;
     }
 
     /// Validates one UTF-8 sequence at `pos` and returns its byte length.

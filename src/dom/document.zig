@@ -164,14 +164,18 @@ pub fn parseWith(
     input: []const u8,
     options: ParseOptions,
 ) ParseError!Document {
-    const owned = allocator.dupe(u8, input) catch return error.OutOfMemory;
+    // The reader needs four zero bytes past the text as scratch space, the same
+    // padding yyjson adds, so its hot loops can skip bounds checks.
+    const owned = allocator.alloc(u8, input.len + 4) catch return error.OutOfMemory;
     errdefer allocator.free(owned);
+    @memcpy(owned[0..input.len], input);
+    @memset(owned[input.len..], 0);
 
     var pool = pool_mod.Pool.init(allocator, input.len, hasWhitespace(input)) catch
         return error.OutOfMemory;
     errdefer pool.deinit();
 
-    const root_index = try reader.read(&pool, owned, options);
+    const root_index = try reader.read(&pool, owned, input.len, options);
     return .{
         .pool = pool,
         .storage = .{ .values = pool.items(), .input = owned },
@@ -189,15 +193,16 @@ pub fn parseInto(
     input: []const u8,
     options: ParseOptions,
 ) ParseError!Document {
-    if (storage.len < input.len) return error.OutOfMemory;
+    if (storage.len < input.len + 4) return error.OutOfMemory;
 
-    // The input copy comes first, then the value pool, so a decode in place
-    // never disturbs the values.
-    const input_copy = storage[0..input.len];
-    @memcpy(input_copy, input);
-    var pool = pool_mod.Pool.initFixed(storage[input.len..]);
+    // The input copy (plus four zero padding bytes) comes first, then the value
+    // pool, so a decode in place never disturbs the values.
+    const input_copy = storage[0 .. input.len + 4];
+    @memcpy(input_copy[0..input.len], input);
+    @memset(input_copy[input.len..], 0);
+    var pool = pool_mod.Pool.initFixed(storage[input.len + 4 ..]);
 
-    const root_index = try reader.read(&pool, input_copy, options);
+    const root_index = try reader.read(&pool, input_copy, input.len, options);
     return .{
         .pool = pool,
         .storage = .{ .values = pool.items(), .input = input_copy },
@@ -214,9 +219,12 @@ pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
     _ = options;
     const values = std.math.mul(usize, input_len, pool_mod.value_size) catch
         return std.math.maxInt(usize);
-    const total = std.math.add(usize, input_len, values) catch
+    // Four bytes of reader padding, plus alignment and slack.
+    const total = std.math.add(usize, input_len, 4) catch
         return std.math.maxInt(usize);
-    return std.math.add(usize, total, 64) catch std.math.maxInt(usize);
+    const with_values = std.math.add(usize, total, values) catch
+        return std.math.maxInt(usize);
+    return std.math.add(usize, with_values, 64) catch std.math.maxInt(usize);
 }
 
 fn hasWhitespace(input: []const u8) bool {

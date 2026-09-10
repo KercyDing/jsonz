@@ -233,7 +233,7 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 /// yyjson's default writer escapes `"`, `\`, and the C0 control characters,
 /// using uppercase hex for `\u00XX`; every other byte, including DEL and any
 /// valid multi-byte sequence, is copied through.
-fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
+inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     const offset: usize = @intCast(item.uni.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
 
@@ -272,7 +272,7 @@ fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     buffer.put('"');
 }
 
-fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
+inline fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
     switch (pool_mod.valueSubtype(item)) {
         .real => try writeReal(buffer, item.uni.float),
         .one => {

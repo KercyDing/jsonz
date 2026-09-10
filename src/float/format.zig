@@ -45,6 +45,9 @@ pub const Shortest = struct {
     text: []const u8,
     /// The value is `d.dddd × 10^exponent`.
     exponent: i32,
+    /// Whether `text` already contains a decimal point, so a caller that must
+    /// keep the value a real knows whether to append `.0`.
+    has_point: bool,
 };
 
 /// Writes the shortest decimal form of `value` into `buf` and returns it.
@@ -120,10 +123,10 @@ fn writeZero(buf: []u8, negative: bool) Error!Shortest {
     if (negative) {
         buf[0] = '-';
         buf[1] = '0';
-        return .{ .text = buf[0..2], .exponent = 0 };
+        return .{ .text = buf[0..2], .exponent = 0, .has_point = false };
     }
     buf[0] = '0';
-    return .{ .text = buf[0..1], .exponent = 0 };
+    return .{ .text = buf[0..1], .exponent = 0, .has_point = false };
 }
 
 /// Significant digits and their decimal exponent: the value is
@@ -359,7 +362,11 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error!Shortest {
         buf[sign + 1] = '.';
         @memset(buf[sign + 2 ..][0..zeros], '0');
         writeDigits(buf[sign + 2 + zeros ..], significand, length);
-        return .{ .text = buf[0 .. sign + 2 + zeros + length], .exponent = point - 1 };
+        return .{
+            .text = buf[0 .. sign + 2 + zeros + length],
+            .exponent = point - 1,
+            .has_point = true,
+        };
     }
 
     if (point >= @as(i32, @intCast(length))) {
@@ -367,7 +374,11 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error!Shortest {
         const zeros: usize = @as(usize, @intCast(point)) - length;
         writeDigits(buf[sign..], significand, length);
         @memset(buf[sign + length ..][0..zeros], '0');
-        return .{ .text = buf[0 .. sign + length + zeros], .exponent = point - 1 };
+        return .{
+            .text = buf[0 .. sign + length + zeros],
+            .exponent = point - 1,
+            .has_point = false,
+        };
     }
 
     // 123.456. Writing the digits one byte late leaves every digit after the
@@ -378,7 +389,11 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error!Shortest {
     writeDigits(buf[sign + 1 ..], significand, length);
     moveBack(buf[sign..], buf[sign + 1 ..], head);
     buf[sign + head] = '.';
-    return .{ .text = buf[0 .. sign + length + 1], .exponent = point - 1 };
+    return .{
+        .text = buf[0 .. sign + length + 1],
+        .exponent = point - 1,
+        .has_point = true,
+    };
 }
 
 /// Copies `count` bytes from `source` to `destination`, where `destination`

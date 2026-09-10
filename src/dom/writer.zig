@@ -335,7 +335,7 @@ fn writeReal(buffer: *Buffer, number: f64) !void {
     try buffer.reserve(shortest.text.len + 2);
     buffer.putAll(shortest.text);
     // A real must keep a `.` or an exponent so it reads back as a real.
-    if (std.mem.indexOfScalar(u8, shortest.text, '.') == null) buffer.putAll(".0");
+    if (!shortest.has_point) buffer.putAll(".0");
 }
 
 /// The rare scientific path, also used when the fused formatter declines.

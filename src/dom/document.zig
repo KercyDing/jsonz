@@ -183,7 +183,7 @@ pub fn parseWith(
     @memcpy(owned[0..input.len], input);
     @memset(owned[input.len..], 0);
 
-    var pool = pool_mod.Pool.init(allocator, input.len, hasWhitespace(input)) catch
+    var pool = pool_mod.Pool.init(allocator, input.len, looksPretty(input)) catch
         return error.OutOfMemory;
     errdefer pool.deinit();
 
@@ -239,8 +239,21 @@ pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
     return std.math.add(usize, with_values, 64) catch std.math.maxInt(usize);
 }
 
-fn hasWhitespace(input: []const u8) bool {
-    return std.mem.indexOfAny(u8, input, " \t\n\r") != null;
+/// Whether the document is pretty printed, judged the way yyjson does: a
+/// container opener followed by two whitespace bytes. Scanning the whole input
+/// would call dense documents with a little indentation "pretty" and badly
+/// under-size the value pool.
+fn looksPretty(input: []const u8) bool {
+    var index: usize = 0;
+    while (index < input.len and isWhitespace(input[index])) index += 1;
+    if (index + 2 >= input.len) return false;
+    const first = input[index];
+    if (first != '[' and first != '{') return false;
+    return isWhitespace(input[index + 1]) and isWhitespace(input[index + 2]);
+}
+
+inline fn isWhitespace(byte: u8) bool {
+    return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r';
 }
 
 test "value access" {

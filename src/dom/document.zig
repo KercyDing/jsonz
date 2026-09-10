@@ -176,8 +176,8 @@ pub fn parseWith(
     input: []const u8,
     options: ParseOptions,
 ) ParseError!Document {
-    // The reader needs four zero bytes past the text as scratch space, the same
-    // padding yyjson adds, so its hot loops can skip bounds checks.
+    // The reader needs four zero bytes past the text as scratch space, so its
+    // hot loops can skip bounds checks.
     const owned = allocator.alloc(u8, input.len + 4) catch return error.OutOfMemory;
     errdefer allocator.free(owned);
     @memcpy(owned[0..input.len], input);
@@ -239,10 +239,10 @@ pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
     return std.math.add(usize, with_values, 64) catch std.math.maxInt(usize);
 }
 
-/// Whether the document is pretty printed, judged the way yyjson does: a
-/// container opener followed by two whitespace bytes. Scanning the whole input
-/// would call dense documents with a little indentation "pretty" and badly
-/// under-size the value pool.
+/// Whether the document is indented rather than compact: a container opener
+/// followed by two whitespace bytes. Scanning the whole input would call dense
+/// documents with a little indentation "pretty" and badly under-size the value
+/// pool.
 fn looksPretty(input: []const u8) bool {
     var index: usize = 0;
     while (index < input.len and isWhitespace(input[index])) index += 1;

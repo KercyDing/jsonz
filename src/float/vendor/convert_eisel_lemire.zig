@@ -3,8 +3,7 @@
 //! Copied verbatim from Zig 0.16.0 and kept diffable against upstream, so a
 //! future Zig release can be re-synced by copying the file again. The table is
 //! the standard 128-bit approximation of the powers of five that the
-//! Eisel-Lemire algorithm multiplies a mantissa by; yyjson, which this library
-//! already vendors, carries the same table in `src/yyjson/yyjson.c`.
+//! Eisel-Lemire algorithm multiplies a mantissa by.
 //!
 //! Zig is MIT licensed: <https://github.com/ziglang/zig/blob/master/LICENSE>.
 //! `float/parse.zig` documents why this copy exists.

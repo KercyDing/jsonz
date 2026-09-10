@@ -24,6 +24,14 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"-std=c99"},
     });
 
+    // float
+    const float_mod = b.addModule("float", .{
+        .root_source_file = b.path("src/float/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+    });
+
     // jsonz
     const jsonz_mod = b.addModule("jsonz", .{
         .root_source_file = b.path("src/root.zig"),
@@ -31,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .strip = strip,
         .imports = &.{
+            .{ .name = "float", .module = float_mod },
             .{ .name = "yyjson_c", .module = yyjson_mod },
         },
     });
@@ -42,6 +51,12 @@ pub fn build(b: *std.Build) void {
         .root_module = jsonz_mod,
     });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+
+    // `float` is a separate module, so its tests need their own test target.
+    const float_tests = b.addTest(.{
+        .root_module = float_mod,
+    });
+    test_step.dependOn(&b.addRunArtifact(float_tests).step);
 
     addTest(
         b,
@@ -102,6 +117,7 @@ fn addBench(
         @panic("-Dmode must be dynamic or typed");
     }
 
+    // yyjson
     const yyjson_c = b.addTranslateC(.{
         .root_source_file = b.path("src/yyjson/yyjson_bridge.h"),
         .target = target,
@@ -119,11 +135,18 @@ fn addBench(
         .flags = &.{"-std=c99"},
     });
 
+    const float_mod = b.createModule(.{
+        .root_source_file = b.path("src/float/root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
     const jsonz_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         .imports = &.{
+            .{ .name = "float", .module = float_mod },
             .{ .name = "yyjson_c", .module = yyjson_mod },
         },
     });
@@ -132,6 +155,8 @@ fn addBench(
         .root_source_file = b.path("bench/main.zig"),
         .target = target,
         .optimize = .ReleaseFast,
+        // The benchmark uses `std.heap.c_allocator` for its own allocations.
+        .link_libc = true,
         .imports = &.{
             .{ .name = "jsonz", .module = jsonz_mod },
         },

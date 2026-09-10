@@ -1,7 +1,7 @@
 const deserialize = @import("deserialize.zig");
 const serialize = @import("serialize.zig");
 const cursor = @import("cursor.zig");
-const float = @import("float/root.zig");
+const float = @import("float");
 const kind = @import("kind.zig");
 const pool = @import("pool.zig");
 

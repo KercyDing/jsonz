@@ -4,7 +4,7 @@
 //! future Zig release can be re-synced by copying the file again.
 //!
 //! Zig is MIT licensed: <https://github.com/ziglang/zig/blob/master/LICENSE>.
-//! `typed/float/parse.zig` documents why this copy exists.
+//! `float/parse.zig` documents why this copy exists.
 
 const std = @import("std");
 

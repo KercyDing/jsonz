@@ -7,10 +7,10 @@
 //! already vendors, carries the same table in `src/yyjson/yyjson.c`.
 //!
 //! Zig is MIT licensed: <https://github.com/ziglang/zig/blob/master/LICENSE>.
-//! `typed/float/parse.zig` documents why this copy exists.
+//! `float/parse.zig` documents why this copy exists.
 //!
 //! One local change: the power table below is `pub`, so that
-//! `typed/float/format.zig` can check the table it generates at comptime
+//! `float/format.zig` can check the table it generates at comptime
 //! against this one. The normalised significand of `5^k` and of `10^k` are the
 //! same bits, so this table doubles as the decimal formatter's power table.
 

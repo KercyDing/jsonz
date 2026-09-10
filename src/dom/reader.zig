@@ -11,14 +11,15 @@ const Value = pool_mod.Value;
 const scan_chunk = 32;
 const ScanVector = @Vector(scan_chunk, u8);
 
-/// Whether a chunk contains a quote, an escape, a control byte, or a non-ASCII
-/// byte; a plain ASCII run can be skipped without touching it byte by byte.
-inline fn chunkHasSpecial(bytes: ScanVector) bool {
+/// Bit `i` is set when byte `i` of the chunk is a quote, an escape, a control
+/// byte, or a non-ASCII byte; `@ctz` then points at the first of them, so a
+/// plain ASCII run can be skipped or copied in one go.
+inline fn specialMask(bytes: ScanVector) u32 {
     const quote = bytes == @as(ScanVector, @splat('"'));
     const escape = bytes == @as(ScanVector, @splat('\\'));
     const control = bytes < @as(ScanVector, @splat(0x20));
     const high = bytes > @as(ScanVector, @splat(0x7f));
-    return @reduce(.Or, quote | escape | control | high);
+    return @bitCast(quote | escape | control | high);
 }
 
 /// Continuation-byte count for a UTF-8 lead byte, or `0xFF` when invalid.
@@ -552,7 +553,11 @@ const Reader = struct {
         scan_loop: while (true) {
             while (scan + scan_chunk <= self.end) {
                 const bytes: ScanVector = input[scan..][0..scan_chunk].*;
-                if (chunkHasSpecial(bytes)) break;
+                const special = specialMask(bytes);
+                if (special != 0) {
+                    scan += @ctz(special);
+                    break;
+                }
                 scan += scan_chunk;
             }
             const window_end = @min(scan + scan_chunk, self.end);
@@ -582,7 +587,20 @@ const Reader = struct {
         while (true) {
             while (pos + scan_chunk <= self.end) {
                 const bytes: ScanVector = input[pos..][0..scan_chunk].*;
-                if (chunkHasSpecial(bytes)) break;
+                const special = specialMask(bytes);
+                if (special != 0) {
+                    const plain = @ctz(special);
+                    if (plain != 0) {
+                        std.mem.copyForwards(
+                            u8,
+                            input[write..][0..plain],
+                            input[pos..][0..plain],
+                        );
+                        write += plain;
+                        pos += plain;
+                    }
+                    break;
+                }
                 std.mem.copyForwards(
                     u8,
                     input[write..][0..scan_chunk],

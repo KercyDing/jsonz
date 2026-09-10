@@ -46,8 +46,8 @@ const hex_digits: [256]u8 = blk: {
 
 /// Continuation-byte count for a UTF-8 lead byte, or `0xFF` when invalid.
 ///
-/// This is the same accepted set as yyjson: continuation bytes and overlong
-/// two-byte leads (`0x80..0xC1`) and leads above `0xF4` are invalid.
+/// Continuation bytes, overlong two-byte leads (`0x80..0xC1`), and leads above
+/// `0xF4` are invalid.
 const utf8_continuations: [256]u8 = blk: {
     var table: [256]u8 = @splat(0xFF);
     for (0x00..0x80) |i| table[i] = 0;
@@ -57,7 +57,7 @@ const utf8_continuations: [256]u8 = blk: {
     break :blk table;
 };
 
-/// Options that control DOM parsing, matching yyjson's read flags.
+/// Options that control DOM parsing.
 pub const Options = struct {
     /// Accept `//` and `/* ... */` comments, which are not part of standard JSON.
     allow_comments: bool = false,
@@ -75,8 +75,8 @@ pub const Error = error{ InvalidJson, OutOfMemory };
 /// Parses the JSON in `buffer[0..end]` into `pool` and returns the root index.
 ///
 /// `buffer` must have four readable zero bytes at `buffer[end..end + 4]`; the
-/// reader uses them the way yyjson does, so its hot loops can skip bounds
-/// checks. String escape sequences are decoded in place inside `buffer`.
+/// reader relies on them, so its hot loops can skip bounds checks. String
+/// escape sequences are decoded in place inside `buffer`.
 pub fn read(pool: *Pool, buffer: []u8, end: usize, options: Options) Error!u32 {
     var reader: Reader = .{
         .input = buffer[0 .. end + 4],
@@ -133,7 +133,7 @@ const Opened = struct {
     state: State,
 };
 
-/// A goto-free port of yyjson's reader finite state machine.
+/// The reader's finite state machine.
 ///
 /// The mutable cursor and container counters are locals in `run` rather than
 /// fields, so writes to the input buffer and value pool cannot force LLVM to
@@ -702,7 +702,7 @@ const Reader = struct {
     /// Advances over a run of UTF-8 sequences at `pos`, returning the offset of
     /// the first ASCII byte or the end of the run.
     ///
-    /// This is yyjson's mask-and-pattern validation: one little-endian 32-bit
+    /// Mask-and-pattern validation: one little-endian 32-bit
     /// load checks a whole sequence, so runs of same-length sequences (common
     /// for CJK text) move several bytes per iteration.
     fn skipUtf8(self: *Reader, start: usize) Error!usize {
@@ -747,8 +747,8 @@ const Reader = struct {
 
     /// Validates one UTF-8 sequence at `pos` and returns its byte length.
     ///
-    /// yyjson validates UTF-8 by default, so this rejects lone continuation
-    /// bytes, overlong forms, surrogates, and code points beyond U+10FFFF.
+    /// Rejects lone continuation bytes, overlong forms, surrogates, and code
+    /// points beyond U+10FFFF.
     inline fn utf8SequenceLen(self: *Reader, pos: usize) Error!usize {
         const input = self.input;
         const b0 = input[pos];

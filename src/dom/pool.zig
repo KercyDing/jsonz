@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// The JSON value type, matching yyjson's 3-bit `YYJSON_TYPE_*` tag.
+/// The JSON value type, stored in the low three bits of a tag.
 pub const Type = enum(u3) {
     none = 0,
     raw = 1,
@@ -12,28 +12,28 @@ pub const Type = enum(u3) {
     object = 7,
 };
 
-/// The value subtype, matching yyjson's 2-bit `YYJSON_SUBTYPE_*` tag.
+/// The value subtype, stored in the next two bits of a tag.
 pub const Subtype = enum(u2) {
     none = 0,
     one = 1,
     real = 2,
 };
 
-/// Boolean `false`, `YYJSON_SUBTYPE_FALSE`.
+/// Boolean `false`.
 pub const false_value: Subtype = .none;
-/// Boolean `true`, `YYJSON_SUBTYPE_TRUE`.
+/// Boolean `true`.
 pub const true_value: Subtype = .one;
-/// Unsigned integer, `YYJSON_SUBTYPE_UINT`.
+/// Unsigned integer.
 pub const uint: Subtype = .none;
-/// Signed integer, `YYJSON_SUBTYPE_SINT`.
+/// Signed integer.
 pub const sint: Subtype = .one;
-/// String that contains no escape sequence, `YYJSON_SUBTYPE_NOESC`.
+/// String that contains no escape sequence.
 pub const no_escape: Subtype = .one;
 
 /// The first word of every value: type, subtype, and length.
 ///
-/// The bit layout is yyjson's `tag`: 3 bits of type, 2 bits of subtype, 3
-/// reserved bits, then a 56-bit length.
+/// The layout is 3 bits of type, 2 bits of subtype, 3 reserved bits, then a
+/// 56-bit length.
 pub const Tag = packed struct(u64) {
     type: Type,
     subtype: Subtype = .none,
@@ -57,13 +57,13 @@ pub const Payload = extern union {
     offset: u64,
 };
 
-/// One 16-byte DOM value; the Zig spelling of `yyjson_val`.
+/// One 16-byte DOM value: a tag and a payload.
 pub const Value = extern struct {
     tag: Tag = .{ .type = .none },
     uni: Payload = .{ .uint = 0 },
 };
 
-/// `sizeof(yyjson_val)`.
+/// The size of one value.
 pub const value_size = @sizeOf(Value);
 
 /// Packs a type, subtype, and length into a tag.
@@ -100,11 +100,10 @@ pub fn indexAtOffset(from: u32, offset: u64) u32 {
 
 /// Value storage for one document.
 ///
-/// Values live in one contiguous, depth-first array exactly like yyjson's read
-/// pool: a container's children start at the next index, and `uni.offset`
-/// skips to the value after a container's subtree. A pool is either owned by an
-/// allocator and can grow, or backed by caller storage and fails with
-/// `error.OutOfMemory` when it is full.
+/// Values live in one contiguous, depth-first array: a container's children
+/// start at the next index, and `uni.offset` skips to the value after a
+/// container's subtree. A pool is either owned by an allocator and can grow, or
+/// backed by caller storage and fails with `error.OutOfMemory` when it is full.
 pub const Pool = struct {
     /// Null for caller-provided storage, which `deinit` must not free.
     allocator: ?std.mem.Allocator = null,

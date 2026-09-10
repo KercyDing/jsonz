@@ -87,8 +87,8 @@ inline fn copySized(comptime size: usize, dest: [*]u8, src: [*]const u8) void {
 
 /// A growable output buffer with an unchecked `reserve` + write split.
 ///
-/// Like yyjson's writer, each value reserves the most bytes it can produce and
-/// then writes without further checks, so the hot path is plain stores.
+/// Each value reserves the most bytes it can produce and then writes without
+/// further checks, so the hot path is plain stores.
 const Buffer = struct {
     allocator: std.mem.Allocator,
     list: std.ArrayList(u8) = .empty,
@@ -145,9 +145,8 @@ pub fn toWriter(
     value: value_mod.Value,
     options: WriteOptions,
 ) !void {
-    // The document is buffered and flushed once, matching the previous
-    // yyjson-backed implementation and keeping this on the same fast path as
-    // `toSlice`.
+    // The document is buffered and flushed once, which keeps this on the same
+    // fast path as `toSlice`.
     const output = try toSlice(std.heap.smp_allocator, value, options);
     defer std.heap.smp_allocator.free(output);
     try writer.writeAll(output);
@@ -155,9 +154,8 @@ pub fn toWriter(
 
 /// Writes `value`, iteratively so document depth cannot overflow the stack.
 ///
-/// The traversal mirrors yyjson's writer: container frames are pushed on an
-/// explicit stack, and separators are emitted before each value instead of
-/// being overwritten afterwards.
+/// The traversal pushes container frames on an explicit stack and emits
+/// separators before each value instead of overwriting them afterwards.
 fn write(
     buffer: *Buffer,
     value: value_mod.Value,
@@ -298,9 +296,9 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 
 /// Writes one UTF-8 string, escaping only what JSON requires.
 ///
-/// yyjson's default writer escapes `"`, `\`, and the C0 control characters,
-/// using uppercase hex for `\u00XX`; every other byte, including DEL and any
-/// valid multi-byte sequence, is copied through.
+/// Escapes `"`, `\`, and the C0 control characters, using uppercase hex for
+/// `\u00XX`; every other byte, including DEL and any valid multi-byte sequence,
+/// is copied through.
 inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     const offset: usize = @intCast(item.uni.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
@@ -419,9 +417,9 @@ inline fn writeSigned(buffer: *Buffer, value: i64) void {
 
 /// Writes an `f64` in the shortest form that reads back identically.
 ///
-/// The digits and the choice between fixed and scientific notation follow
-/// yyjson: fixed for decimal exponents in `[-6, 20]`, scientific outside it,
-/// and a real is never written without a `.` or an exponent.
+/// The digits come from the shortest round-tripping decimal; the notation is
+/// fixed for decimal exponents in `[-6, 20]` and scientific outside it, and a
+/// real is never written without a `.` or an exponent.
 fn writeReal(buffer: *Buffer, number: f64) !void {
     var scratch: [float.maxNumberLength(f64) + 8]u8 = undefined;
     const shortest = float.formatNumberExponent(&scratch, number) catch {

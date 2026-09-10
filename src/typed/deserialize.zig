@@ -263,14 +263,11 @@ fn deserializeSlice(comptime T: type, deserializer: *Deserializer) Error!T {
 
     var result: std.ArrayList(Child) = .empty;
     errdefer result.deinit(deserializer.allocator);
-    if (comptime kind.typeKind(Child) == .string) {
-        const estimate = @min(deserializer.cursor.remainingBytes() / 10, 4096);
-        if (estimate != 0) {
-            result.ensureTotalCapacity(deserializer.allocator, estimate) catch return error.OutOfMemory;
-        }
-    } else {
-        result.ensureTotalCapacity(deserializer.allocator, 8) catch return error.OutOfMemory;
-    }
+    // Start small and let the list double. Reserving from the remaining input
+    // is only sound when the bytes are the bytes of this array: a document with
+    // many small arrays would otherwise reserve, for each one, room for
+    // everything that follows it.
+    result.ensureTotalCapacity(deserializer.allocator, 8) catch return error.OutOfMemory;
     if (try deserializer.cursor.isContainerEmpty(']')) {
         _ = try deserializer.cursor.next();
         return result.toOwnedSlice(deserializer.allocator) catch error.OutOfMemory;
@@ -596,4 +593,33 @@ test "parsed value fallback" {
 
     try testing.expectEqual(@as(usize, 20), parsed.value.len);
     try testing.expect(parsed.fallback_arena.queryCapacity() != 0);
+}
+
+test "many caller-buffer string slices" {
+    const Entry = struct {
+        name: []const u8,
+        tags: []const []const u8,
+    };
+
+    // The count of a slice is local to that slice, so sizing one from the
+    // bytes left in the document reserves, per array, room for everything that
+    // follows it. Enough small arrays here used to exhaust the caller buffer.
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(testing.allocator);
+    try input.appendSlice(testing.allocator, "[");
+    for (0..200) |index| {
+        var piece: [96]u8 = undefined;
+        const text = try std.fmt.bufPrint(&piece, "{s}{{\"name\":\"n{d}\",\"tags\":[\"a\",\"b\"]}}", .{
+            if (index == 0) "" else ",",
+            index,
+        });
+        try input.appendSlice(testing.allocator, text);
+    }
+    try input.appendSlice(testing.allocator, "]");
+
+    var buffer: [256 * 1024]u8 = undefined;
+    const entries = try parseInto([]const Entry, &buffer, input.items, .{});
+    try testing.expectEqual(@as(usize, 200), entries.len);
+    try testing.expectEqualStrings("n0", entries[0].name);
+    try testing.expectEqualStrings("b", entries[199].tags[1]);
 }

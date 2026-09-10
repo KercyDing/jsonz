@@ -1,5 +1,6 @@
 const document = @import("document.zig");
 const value = @import("value.zig");
+const value_pool = @import("value_pool.zig");
 
 /// An owned parsed DOM document.
 pub const Document = document.Document;
@@ -40,4 +41,5 @@ pub const toWriter = value.toWriter;
 test {
     _ = document;
     _ = value;
+    _ = value_pool;
 }

@@ -215,7 +215,7 @@ fn deserializeVoid(deserializer: *Deserializer) Error!void {
 }
 
 fn deserializeOptional(comptime T: type, deserializer: *Deserializer) Error!T {
-    if (try deserializer.cursor.peek() == .null_lit) {
+    if (try deserializer.cursor.peekIsNull()) {
         _ = try deserializer.cursor.next();
         return null;
     }

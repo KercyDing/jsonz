@@ -76,6 +76,17 @@ pub const Cursor = struct {
         return self.next();
     }
 
+    /// Reports whether the next token is JSON `null`, without consuming it.
+    ///
+    /// Only the leading byte is inspected, which is all that distinguishing
+    /// `null` needs. This keeps optional fields from scanning a whole string or
+    /// number token only to throw the scan away.
+    pub fn peekIsNull(self: *Cursor) Error!bool {
+        self.skipWhitespace();
+        if (self.pos == self.input.len) return error.UnexpectedEof;
+        return self.input[self.pos] == 'n';
+    }
+
     /// Consumes a required object key/value separator (`:`).
     pub fn expectColon(self: *Cursor) Error!void {
         self.skipWhitespace();

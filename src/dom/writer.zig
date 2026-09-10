@@ -15,25 +15,74 @@ const Frame = struct {
     object: bool,
 };
 
+/// All two-digit decimal pairs, so integers divide by 100 instead of 10.
+const digit_pairs: [200]u8 = blk: {
+    var table: [200]u8 = undefined;
+    for (0..100) |i| {
+        table[i * 2] = '0' + @as(u8, @intCast(i / 10));
+        table[i * 2 + 1] = '0' + @as(u8, @intCast(i % 10));
+    }
+    break :blk table;
+};
+
+/// A growable output buffer with an unchecked `reserve` + write split.
+///
+/// Like yyjson's writer, each value reserves the most bytes it can produce and
+/// then writes without further checks, so the hot path is plain stores.
+const Buffer = struct {
+    allocator: std.mem.Allocator,
+    list: std.ArrayList(u8) = .empty,
+
+    inline fn reserve(self: *Buffer, additional: usize) !void {
+        const required = self.list.items.len + additional;
+        if (required <= self.list.capacity) return;
+        try self.list.ensureTotalCapacity(self.allocator, required);
+    }
+
+    inline fn put(self: *Buffer, byte: u8) void {
+        self.list.appendAssumeCapacity(byte);
+    }
+
+    inline fn putAll(self: *Buffer, bytes: []const u8) void {
+        self.list.appendSliceAssumeCapacity(bytes);
+    }
+
+    inline fn putSpaces(self: *Buffer, count: usize) void {
+        @memset(self.list.unusedCapacitySlice()[0..count], ' ');
+        self.list.items.len += count;
+    }
+};
+
 /// Serializes `value` to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(
     allocator: std.mem.Allocator,
     value: value_mod.Value,
     options: WriteOptions,
 ) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    try write(&out.writer, value, options, allocator);
-    return out.toOwnedSlice();
+    var buffer: Buffer = .{ .allocator = allocator };
+    errdefer buffer.list.deinit(allocator);
+    // The source length is a good output hint, so the buffer rarely grows.
+    const estimate = if (options.pretty)
+        value.storage.input.len * 2 + 64
+    else
+        value.storage.input.len + 64;
+    try buffer.list.ensureTotalCapacity(allocator, estimate);
+    try write(&buffer, value, options, allocator);
+    return buffer.list.toOwnedSlice(allocator);
 }
 
-/// Serializes `value` to `writer` without allocating an output slice.
+/// Serializes `value` to `writer`.
 pub fn toWriter(
     writer: *std.Io.Writer,
     value: value_mod.Value,
     options: WriteOptions,
 ) !void {
-    return write(writer, value, options, std.heap.smp_allocator);
+    // The document is buffered and flushed once, matching the previous
+    // yyjson-backed implementation and keeping this on the same fast path as
+    // `toSlice`.
+    const output = try toSlice(std.heap.smp_allocator, value, options);
+    defer std.heap.smp_allocator.free(output);
+    try writer.writeAll(output);
 }
 
 /// Writes `value`, iteratively so document depth cannot overflow the stack.
@@ -42,7 +91,7 @@ pub fn toWriter(
 /// explicit stack, and separators are emitted before each value instead of
 /// being overwritten afterwards.
 fn write(
-    writer: *std.Io.Writer,
+    buffer: *Buffer,
     value: value_mod.Value,
     options: WriteOptions,
     allocator: std.mem.Allocator,
@@ -52,7 +101,7 @@ fn write(
     const root = values[value.index];
     const root_type = pool_mod.valueType(root);
     if ((root_type != .array and root_type != .object) or pool_mod.valueLen(root) == 0) {
-        return writeSingle(writer, input, root);
+        return writeSingle(buffer, input, root);
     }
 
     var stack: std.ArrayList(Frame) = .empty;
@@ -64,8 +113,9 @@ fn write(
     var level: usize = 1;
     var index = value.index + 1;
 
-    try writer.writeByte(if (object) '{' else '[');
-    if (options.pretty) try writer.writeByte('\n');
+    try buffer.reserve(2);
+    buffer.put(if (object) '{' else '[');
+    if (options.pretty) buffer.put('\n');
 
     while (true) {
         const item = values[index];
@@ -73,42 +123,53 @@ fn write(
         const is_key = object and remaining % 2 == 0;
 
         if (!first) {
+            try buffer.reserve(2);
             if (is_key) {
                 // The previous slot was an object value.
-                try writer.writeByte(',');
-                if (options.pretty) try writer.writeByte('\n');
+                buffer.put(',');
+                if (options.pretty) buffer.put('\n');
             } else if (object) {
                 // This slot is an object value, directly after its key.
-                try writer.writeAll(if (options.pretty) ": " else ":");
+                buffer.put(':');
+                if (options.pretty) buffer.put(' ');
             } else {
-                try writer.writeByte(',');
-                if (options.pretty) try writer.writeByte('\n');
+                buffer.put(',');
+                if (options.pretty) buffer.put('\n');
             }
         }
         // Object values stay on their key's line; keys and array elements do not.
-        if (options.pretty and !(object and !is_key)) try writeIndent(writer, level);
+        if (options.pretty and !(object and !is_key)) {
+            try buffer.reserve(level * 4);
+            buffer.putSpaces(level * 4);
+        }
         first = false;
 
         switch (item_type) {
-            .string => try writeString(writer, input, item),
-            .number => try writeNumber(writer, item),
-            .bool => try writer.writeAll(
-                if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false",
-            ),
-            .null => try writer.writeAll("null"),
+            .string => try writeString(buffer, input, item),
+            .number => try writeNumber(buffer, item),
+            .bool => {
+                try buffer.reserve(5);
+                buffer.putAll(if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false");
+            },
+            .null => {
+                try buffer.reserve(4);
+                buffer.putAll("null");
+            },
             .array, .object => {
                 const child_object = item_type == .object;
                 const child_len = pool_mod.valueLen(item);
                 if (child_len == 0) {
-                    try writer.writeAll(if (child_object) "{}" else "[]");
+                    try buffer.reserve(2);
+                    buffer.putAll(if (child_object) "{}" else "[]");
                 } else {
                     try stack.append(allocator, .{ .remaining = remaining, .object = object });
                     object = child_object;
                     remaining = if (object) child_len * 2 else child_len;
                     first = true;
-                    try writer.writeByte(if (object) '{' else '[');
+                    try buffer.reserve(2);
+                    buffer.put(if (object) '{' else '[');
                     if (options.pretty) {
-                        try writer.writeByte('\n');
+                        buffer.put('\n');
                         level += 1;
                     }
                     index += 1;
@@ -125,11 +186,14 @@ fn write(
         // Close this container and every parent that just ended with it.
         while (true) {
             if (options.pretty) {
-                try writer.writeByte('\n');
+                try buffer.reserve(level * 4 + 2);
+                buffer.put('\n');
                 level -= 1;
-                try writeIndent(writer, level);
+                buffer.putSpaces(level * 4);
+            } else {
+                try buffer.reserve(1);
             }
-            try writer.writeByte(if (object) '}' else ']');
+            buffer.put(if (object) '}' else ']');
             const frame = stack.pop() orelse return;
             object = frame.object;
             remaining = frame.remaining - 1;
@@ -140,16 +204,26 @@ fn write(
 }
 
 /// Writes a value that is not a non-empty container.
-fn writeSingle(writer: *std.Io.Writer, input: []const u8, item: pool_mod.Value) !void {
+fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     switch (pool_mod.valueType(item)) {
-        .string => try writeString(writer, input, item),
-        .number => try writeNumber(writer, item),
-        .bool => try writer.writeAll(
-            if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false",
-        ),
-        .null => try writer.writeAll("null"),
-        .array => try writer.writeAll("[]"),
-        .object => try writer.writeAll("{}"),
+        .string => try writeString(buffer, input, item),
+        .number => try writeNumber(buffer, item),
+        .bool => {
+            try buffer.reserve(5);
+            buffer.putAll(if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false");
+        },
+        .null => {
+            try buffer.reserve(4);
+            buffer.putAll("null");
+        },
+        .array => {
+            try buffer.reserve(2);
+            buffer.putAll("[]");
+        },
+        .object => {
+            try buffer.reserve(2);
+            buffer.putAll("{}");
+        },
         else => unreachable,
     }
 }
@@ -159,14 +233,17 @@ fn writeSingle(writer: *std.Io.Writer, input: []const u8, item: pool_mod.Value) 
 /// yyjson's default writer escapes `"`, `\`, and the C0 control characters,
 /// using uppercase hex for `\u00XX`; every other byte, including DEL and any
 /// valid multi-byte sequence, is copied through.
-fn writeString(writer: *std.Io.Writer, input: []const u8, item: pool_mod.Value) !void {
+fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     const offset: usize = @intCast(item.uni.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
 
-    try writer.writeByte('"');
+    // Worst case is six bytes per input byte, plus the quotes.
+    try buffer.reserve(bytes.len * 6 + 2);
+    buffer.put('"');
     if (pool_mod.valueSubtype(item) == pool_mod.no_escape) {
-        try writer.writeAll(bytes);
-        return writer.writeByte('"');
+        buffer.putAll(bytes);
+        buffer.put('"');
+        return;
     }
 
     const digits = "0123456789ABCDEF";
@@ -175,34 +252,71 @@ fn writeString(writer: *std.Io.Writer, input: []const u8, item: pool_mod.Value) 
     while (index < bytes.len) : (index += 1) {
         const byte = bytes[index];
         if (byte >= 0x20 and byte != '"' and byte != '\\') continue;
-        try writer.writeAll(bytes[start..index]);
+        buffer.putAll(bytes[start..index]);
         switch (byte) {
-            '"' => try writer.writeAll("\\\""),
-            '\\' => try writer.writeAll("\\\\"),
-            0x08 => try writer.writeAll("\\b"),
-            0x0c => try writer.writeAll("\\f"),
-            '\n' => try writer.writeAll("\\n"),
-            '\r' => try writer.writeAll("\\r"),
-            '\t' => try writer.writeAll("\\t"),
-            else => try writer.writeAll(&.{
+            '"' => buffer.putAll("\\\""),
+            '\\' => buffer.putAll("\\\\"),
+            0x08 => buffer.putAll("\\b"),
+            0x0c => buffer.putAll("\\f"),
+            '\n' => buffer.putAll("\\n"),
+            '\r' => buffer.putAll("\\r"),
+            '\t' => buffer.putAll("\\t"),
+            else => buffer.putAll(&.{
                 '\\',              'u',                 '0', '0',
                 digits[byte >> 4], digits[byte & 0x0f],
             }),
         }
         start = index + 1;
     }
-    try writer.writeAll(bytes[start..]);
-    return writer.writeByte('"');
+    buffer.putAll(bytes[start..]);
+    buffer.put('"');
 }
 
-fn writeNumber(writer: *std.Io.Writer, item: pool_mod.Value) !void {
-    var buffer: [24]u8 = undefined;
-    const text = switch (pool_mod.valueSubtype(item)) {
-        .real => return writeReal(writer, item.uni.float),
-        .one => std.fmt.bufPrint(&buffer, "{d}", .{item.uni.int}) catch unreachable,
-        .none => std.fmt.bufPrint(&buffer, "{d}", .{item.uni.uint}) catch unreachable,
-    };
-    try writer.writeAll(text);
+fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
+    switch (pool_mod.valueSubtype(item)) {
+        .real => try writeReal(buffer, item.uni.float),
+        .one => {
+            try buffer.reserve(21);
+            writeSigned(buffer, item.uni.int);
+        },
+        .none => {
+            try buffer.reserve(20);
+            writeUnsigned(buffer, item.uni.uint);
+        },
+    }
+}
+
+inline fn writeUnsigned(buffer: *Buffer, value: u64) void {
+    var digits: [20]u8 = undefined;
+    var index: usize = digits.len;
+    var remaining = value;
+    while (remaining >= 100) {
+        const pair = (remaining % 100) * 2;
+        remaining /= 100;
+        index -= 2;
+        digits[index] = digit_pairs[pair];
+        digits[index + 1] = digit_pairs[pair + 1];
+    }
+    if (remaining >= 10) {
+        const pair = remaining * 2;
+        index -= 2;
+        digits[index] = digit_pairs[pair];
+        digits[index + 1] = digit_pairs[pair + 1];
+    } else {
+        index -= 1;
+        digits[index] = '0' + @as(u8, @intCast(remaining));
+    }
+    buffer.putAll(digits[index..]);
+}
+
+inline fn writeSigned(buffer: *Buffer, value: i64) void {
+    if (value < 0) {
+        buffer.put('-');
+        // Negating `minInt` overflows, so widen to `u64` first.
+        writeUnsigned(buffer, ~@as(u64, @bitCast(value)) + 1);
+    } else {
+        writeUnsigned(buffer, @intCast(value));
+    }
 }
 
 /// Writes an `f64` in the shortest form that reads back identically.
@@ -210,45 +324,26 @@ fn writeNumber(writer: *std.Io.Writer, item: pool_mod.Value) !void {
 /// The digits and the choice between fixed and scientific notation follow
 /// yyjson: fixed for decimal exponents in `[-6, 20]`, scientific outside it,
 /// and a real is never written without a `.` or an exponent.
-fn writeReal(writer: *std.Io.Writer, number: f64) !void {
-    var buffer: [float.maxNumberLength(f64) + 8]u8 = undefined;
-    const decimal = float.formatNumber(&buffer, number) catch {
-        return writeRealScientific(writer, number);
+fn writeReal(buffer: *Buffer, number: f64) !void {
+    var scratch: [float.maxNumberLength(f64) + 8]u8 = undefined;
+    const shortest = float.formatNumberExponent(&scratch, number) catch {
+        return writeRealScientific(buffer, number);
     };
-    const exponent = decimalExponent(decimal);
-    if (exponent < -6 or exponent > 20) return writeRealScientific(writer, number);
-    try writer.writeAll(decimal);
-    if (std.mem.indexOfScalar(u8, decimal, '.') == null) try writer.writeAll(".0");
+    if (shortest.exponent < -6 or shortest.exponent > 20) {
+        return writeRealScientific(buffer, number);
+    }
+    try buffer.reserve(shortest.text.len + 2);
+    buffer.putAll(shortest.text);
+    // A real must keep a `.` or an exponent so it reads back as a real.
+    if (std.mem.indexOfScalar(u8, shortest.text, '.') == null) buffer.putAll(".0");
 }
 
 /// The rare scientific path, also used when the fused formatter declines.
-fn writeRealScientific(writer: *std.Io.Writer, number: f64) !void {
-    var buffer: [32]u8 = undefined;
-    const text = std.fmt.bufPrint(&buffer, "{e}", .{number}) catch return error.InvalidValue;
-    try writer.writeAll(text);
-}
-
-/// Returns the decimal exponent of the shortest form `text`, e.g. `2` for
-/// `"123.45"`, `-3` for `"0.001"`, and `0` for `"0"`.
-fn decimalExponent(text: []const u8) i32 {
-    const point = std.mem.indexOfScalar(u8, text, '.') orelse text.len;
-    var first = text.len;
-    for (text, 0..) |byte, index| {
-        if (byte != '-' and byte != '.' and byte != '0') {
-            first = index;
-            break;
-        }
-    }
-    if (first == text.len) return 0;
-    if (first < point) return @intCast(point - first - 1);
-    return @as(i32, @intCast(point)) - @as(i32, @intCast(first));
-}
-
-fn writeIndent(writer: *std.Io.Writer, level: usize) !void {
-    const spaces = "                ";
-    var remaining = level * 4;
-    while (remaining >= spaces.len) : (remaining -= spaces.len) try writer.writeAll(spaces);
-    if (remaining > 0) try writer.writeAll(spaces[0..remaining]);
+fn writeRealScientific(buffer: *Buffer, number: f64) !void {
+    var scratch: [32]u8 = undefined;
+    const text = std.fmt.bufPrint(&scratch, "{e}", .{number}) catch return error.InvalidValue;
+    try buffer.reserve(text.len);
+    buffer.putAll(text);
 }
 
 test "minified output" {
@@ -289,6 +384,8 @@ test "float formatting" {
     try expectWrite("100000000000000000000.0", "1e20", false);
     try expectWrite("-0.0", "-0.0", false);
     try expectWrite("1", "1", false);
+    try expectWrite("-9223372036854775808", "-9223372036854775808", false);
+    try expectWrite("18446744073709551615", "18446744073709551615", false);
 }
 
 test "string escaping" {

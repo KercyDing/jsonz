@@ -207,12 +207,21 @@ const Reader = struct {
                         const scanned = try self.scanScalar(pos);
                         pos = scanned.pos;
                         count += 1;
-                        pos = try self.skipTrivia(pos);
+                        // A minified document puts the separator right after
+                        // the value, so try that before scanning for trivia.
                         if (pos == self.end) return error.InvalidJson;
-                        switch (input[pos]) {
+                        var separator = input[pos];
+                        if (separator != ',' and separator != ']') {
+                            pos = try self.skipTrivia(pos);
+                            if (pos == self.end) return error.InvalidJson;
+                            separator = input[pos];
+                        }
+                        switch (separator) {
                             ',' => {
                                 pos += 1;
-                                pos = try self.skipTrivia(pos);
+                                // Likewise, the next element usually starts
+                                // right after the comma.
+                                if (space_table[input[pos]]) pos = try self.skipTrivia(pos);
                                 if (pos < self.end and input[pos] == ']') {
                                     if (!self.options.allow_trailing_commas) return error.InvalidJson;
                                     pos += 1;

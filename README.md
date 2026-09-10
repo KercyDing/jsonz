@@ -4,7 +4,7 @@ A tiny, high-performance JSON library for Zig.
 
 `jsonz.typed` provides native Zig serialization and deserialization for known schemas.
 
-`jsonz.dom` provides a high-performance DOM for arbitrary JSON, written in Zig with a compact 16-byte value layout.
+`jsonz.dom` provides a high-performance DOM for arbitrary JSON, a Zig port of [yyjson](https://github.com/ibireme/yyjson).
 
 ## Install
 
@@ -226,6 +226,4 @@ only master release
 
 ## License
 
-jsonz is licensed under the [MIT License](LICENSE).
-
-`src/float/vendor` carries the MIT-licensed Eisel-Lemire float conversion from the Zig standard library.
+[MIT License](LICENSE).

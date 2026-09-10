@@ -22,6 +22,15 @@ inline fn specialMask(bytes: ScanVector) u32 {
     return @bitCast(quote | escape | control | high);
 }
 
+/// Hex digit value, or `0xFF` for a byte that is not a hex digit.
+const hex_digits: [256]u8 = blk: {
+    var table: [256]u8 = @splat(0xFF);
+    for ('0'..'9' + 1) |c| table[c] = c - '0';
+    for ('a'..'f' + 1) |c| table[c] = c - 'a' + 10;
+    for ('A'..'F' + 1) |c| table[c] = c - 'A' + 10;
+    break :blk table;
+};
+
 /// Continuation-byte count for a UTF-8 lead byte, or `0xFF` when invalid.
 ///
 /// This is the same accepted set as yyjson: continuation bytes and overlong
@@ -742,8 +751,8 @@ const Reader = struct {
     /// Decodes `\uXXXX`, including surrogate pairs, into UTF-8 at `write`.
     fn readUnicodeEscape(self: *Reader, start: usize, write: usize) Error!Escape {
         var pos = start;
-        var codepoint: u21 = undefined;
-        pos = try self.readHex4(pos, &codepoint);
+        var codepoint = try self.readHex4(pos);
+        pos += 4;
         if (codepoint >= 0xd800 and codepoint <= 0xdbff) {
             if (pos + 2 > self.end or
                 self.input[pos] != '\\' or self.input[pos + 1] != 'u')
@@ -751,34 +760,50 @@ const Reader = struct {
                 return error.InvalidJson;
             }
             pos += 2;
-            var low: u21 = undefined;
-            pos = try self.readHex4(pos, &low);
+            const low = try self.readHex4(pos);
+            pos += 4;
             if (low < 0xdc00 or low > 0xdfff) return error.InvalidJson;
             codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00);
         } else if (codepoint >= 0xdc00 and codepoint <= 0xdfff) {
             return error.InvalidJson;
         }
 
-        var bytes: [4]u8 = undefined;
-        const len = std.unicode.utf8Encode(codepoint, &bytes) catch return error.InvalidJson;
-        @memcpy(self.input[write..][0..len], bytes[0..len]);
-        return .{ .pos = pos, .write = write + len };
+        // Encode the code point directly; it is already known to be a scalar
+        // value, so no validation is needed.
+        const input = self.input;
+        if (codepoint < 0x80) {
+            input[write] = @intCast(codepoint);
+            return .{ .pos = pos, .write = write + 1 };
+        }
+        if (codepoint < 0x800) {
+            input[write] = @intCast(0xC0 | (codepoint >> 6));
+            input[write + 1] = @intCast(0x80 | (codepoint & 0x3F));
+            return .{ .pos = pos, .write = write + 2 };
+        }
+        if (codepoint < 0x10000) {
+            input[write] = @intCast(0xE0 | (codepoint >> 12));
+            input[write + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+            input[write + 2] = @intCast(0x80 | (codepoint & 0x3F));
+            return .{ .pos = pos, .write = write + 3 };
+        }
+        input[write] = @intCast(0xF0 | (codepoint >> 18));
+        input[write + 1] = @intCast(0x80 | ((codepoint >> 12) & 0x3F));
+        input[write + 2] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+        input[write + 3] = @intCast(0x80 | (codepoint & 0x3F));
+        return .{ .pos = pos, .write = write + 4 };
     }
 
-    fn readHex4(self: *Reader, pos: usize, out: *u21) Error!usize {
+    /// Reads exactly four hex digits at `pos`.
+    inline fn readHex4(self: *Reader, pos: usize) Error!u21 {
         if (pos + 4 > self.end) return error.InvalidJson;
-        var value: u21 = 0;
-        for (self.input[pos..][0..4]) |byte| {
-            const digit: u21 = switch (byte) {
-                '0'...'9' => byte - '0',
-                'a'...'f' => byte - 'a' + 10,
-                'A'...'F' => byte - 'A' + 10,
-                else => return error.InvalidJson,
-            };
-            value = (value << 4) | digit;
-        }
-        out.* = value;
-        return pos + 4;
+        const input = self.input;
+        const a = hex_digits[input[pos]];
+        const b = hex_digits[input[pos + 1]];
+        const c = hex_digits[input[pos + 2]];
+        const d = hex_digits[input[pos + 3]];
+        // Valid digits are 0..15, so any invalid byte shows up in the high bits.
+        if ((a | b | c | d) > 0x0F) return error.InvalidJson;
+        return (@as(u21, a) << 12) | (@as(u21, b) << 8) | (@as(u21, c) << 4) | d;
     }
 
     /// Appends a value; the common case is inlined and only growth is a call.

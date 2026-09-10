@@ -205,7 +205,7 @@ Write options:
 
 ## Development
 
-Development commands use [only](https://github.com/KercyDing/only) and [mise](https://github.com/jdx/mise). `mise` provides the Zig version; this project follows Zig `master` by default.
+Development commands use [only](https://github.com/KercyDing/only) and [mise](https://github.com/jdx/mise). `mise` provides the Zig version; this project targets Zig `0.16.0` by default.
 
 ```sh
 only build             # debug build
@@ -215,12 +215,12 @@ only bench typed       # typed benchmarks
 only release           # optimized build with symbols stripped
 ```
 
-Prefix a command with `z16` to use Zig 0.16 from `mise.zig16.toml`:
+Use the `master` group to run a command with Zig `master` from `mise.master.toml`:
 
 ```sh
-only z16 build
-only z16 test
-only z16 release
+only master build
+only master test
+only master release
 ```
 
 ## License

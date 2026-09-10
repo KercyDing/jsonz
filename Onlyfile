@@ -16,7 +16,7 @@ test():
 [pass] Fuzzy tests stopped.
 [fail] Fuzzy tests failed.
 fuzzy():
-    mise -E zig16 exec -- zig build test --fuzz -Doptimize=ReleaseFast
+    zig build test --fuzz -Doptimize=ReleaseFast
 
 [help] Run benchmarks
 [desc] Use `only bench typed` to enable typed mode.
@@ -32,27 +32,27 @@ bench(mode = "dynamic"):
 release(strip = "true"):
     zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
 
-[help] Zig 0.16 tasks
-group z16 {
+[help] Zig master tasks
+group master {
 
-    [help] Build in debug mode with Zig 0.16
-    [pass] Zig 0.16 debug build complete.
-    [fail] Zig 0.16 debug build failed.
+    [help] Build in debug mode with Zig master
+    [pass] Zig master debug build complete.
+    [fail] Zig master debug build failed.
     build():
-        mise -E zig16 exec -- zig build
+        mise -E master exec -- zig build
 
-    [help] Run tests with Zig 0.16
-    [pass] Zig 0.16 tests passed.
-    [fail] Zig 0.16 tests failed.
+    [help] Run tests with Zig master
+    [pass] Zig master tests passed.
+    [fail] Zig master tests failed.
     test():
-        mise -E zig16 exec -- zig build test
+        mise -E master exec -- zig build test
 
-    [help] Build in release mode with Zig 0.16
-    [desc] Run `only z16 release false` to turn off the strip.
-    [pass] Zig 0.16 release build complete.
-    [fail] Zig 0.16 release build failed.
+    [help] Build in release mode with Zig master
+    [desc] Run `only master release false` to turn off the strip.
+    [pass] Zig master release build complete.
+    [fail] Zig master release build failed.
     release(strip = "true"):
-        mise -E zig16 exec -- zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
+        mise -E master exec -- zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
 }
 
 [help] Format source and build files

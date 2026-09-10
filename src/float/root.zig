@@ -22,6 +22,17 @@ pub const parseNumber = parse.parse;
 /// The value and the offset just past the number `parseNumber` scanned.
 pub const Result = parse.Result;
 
+/// Scans a JSON number once, reporting both its exact integer value (when it
+/// has one) and the digits a double conversion needs.
+pub const scanNumber = parse.scan;
+
+/// The state `scanNumber` reports.
+pub const Scanned = parse.Scanned;
+
+/// Converts the digits `scanNumber` returned to `T`, or `null` when the caller
+/// should fall back to `std.fmt.parseFloat`.
+pub const convertScanned = parse.convertScanned;
+
 /// Writes the shortest decimal form of `value` into `buf` and returns it.
 ///
 /// The layout matches `std.fmt`'s `{d}`: never an exponent, never a trailing

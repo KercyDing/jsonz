@@ -485,81 +485,55 @@ const Reader = struct {
         };
     }
 
-    /// Reads a number, accumulating digits while scanning.
+    /// Reads a number with a single scan.
     ///
-    /// An integer that fits in `u64`/`i64` is kept exact; anything with a
-    /// fraction or exponent, or that overflows, is converted to a double, the
-    /// same demotion yyjson does.
-    inline fn scanNumber(self: *Reader, start: usize) Error!Scan {
-        const input = self.input;
-        var pos = start;
+    /// `float.scanNumber` reports the exact integer value when the token is a
+    /// plain integer, and the significant digits a double conversion needs
+    /// otherwise, so no digits are scanned twice.
+    fn scanNumber(self: *Reader, start: usize) Error!Scan {
+        const scanned = float.scanNumber(self.input[0..self.end], start) catch
+            return error.InvalidJson;
 
-        const negative = input[pos] == '-';
-        if (negative) pos += 1;
-
-        var mantissa: u64 = 0;
-        var digits: usize = 0;
-        var overflow = false;
-        const first = input[pos];
-        if (first == '0') {
-            pos += 1;
-        } else if (first >= '1' and first <= '9') {
-            while (std.ascii.isDigit(input[pos])) : (pos += 1) {
-                const digit: u64 = input[pos] - '0';
-                if (!overflow) {
-                    // 19 digits always fit; later digits need an exact check.
-                    if (digits < 19) {
-                        mantissa = mantissa * 10 + digit;
-                    } else if (mantissa <= (std.math.maxInt(u64) - digit) / 10) {
-                        mantissa = mantissa * 10 + digit;
-                    } else {
-                        overflow = true;
-                    }
-                }
-                digits += 1;
-            }
-        } else return error.InvalidJson;
-
-        var real = false;
-        if (input[pos] == '.') {
-            real = true;
-            pos += 1;
-            if (!std.ascii.isDigit(input[pos])) return error.InvalidJson;
-            while (std.ascii.isDigit(input[pos])) pos += 1;
-        }
-        if (input[pos] == 'e' or input[pos] == 'E') {
-            real = true;
-            pos += 1;
-            if (input[pos] == '+' or input[pos] == '-') pos += 1;
-            if (!std.ascii.isDigit(input[pos])) return error.InvalidJson;
-            while (std.ascii.isDigit(input[pos])) pos += 1;
-        }
-
-        if (!real and !overflow) {
-            if (negative) {
-                if (mantissa < (@as(u64, 1) << 63)) {
+        if (scanned.integer) |magnitude| {
+            if (scanned.negative) {
+                if (magnitude < (@as(u64, 1) << 63)) {
                     return .{
-                        .index = try self.append(pool_mod.makeTag(.number, pool_mod.sint, 0), .{ .int = -@as(i64, @intCast(mantissa)) }),
-                        .pos = pos,
+                        .index = try self.append(
+                            pool_mod.makeTag(.number, pool_mod.sint, 0),
+                            .{ .int = -@as(i64, @intCast(magnitude)) },
+                        ),
+                        .pos = scanned.end,
                     };
-                } else if (mantissa == (@as(u64, 1) << 63)) {
+                } else if (magnitude == (@as(u64, 1) << 63)) {
                     return .{
-                        .index = try self.append(pool_mod.makeTag(.number, pool_mod.sint, 0), .{ .int = std.math.minInt(i64) }),
-                        .pos = pos,
+                        .index = try self.append(
+                            pool_mod.makeTag(.number, pool_mod.sint, 0),
+                            .{ .int = std.math.minInt(i64) },
+                        ),
+                        .pos = scanned.end,
                     };
                 }
             } else {
                 return .{
-                    .index = try self.append(pool_mod.makeTag(.number, pool_mod.uint, 0), .{ .uint = mantissa }),
-                    .pos = pos,
+                    .index = try self.append(
+                        pool_mod.makeTag(.number, pool_mod.uint, 0),
+                        .{ .uint = magnitude },
+                    ),
+                    .pos = scanned.end,
                 };
             }
         }
 
-        const number = try parseReal(input, start);
+        const value = float.convertScanned(f64, scanned) orelse
+            (std.fmt.parseFloat(f64, self.input[start..scanned.end]) catch
+                return error.InvalidJson);
+        if (!std.math.isFinite(value)) return error.InvalidJson;
         return .{
-            .index = try self.append(pool_mod.makeTag(.number, .real, 0), .{ .float = number.value }),
-            .pos = number.end,
+            .index = try self.append(
+                pool_mod.makeTag(.number, .real, 0),
+                .{ .float = value },
+            ),
+            .pos = scanned.end,
         };
     }
 
@@ -849,23 +823,6 @@ const Reader = struct {
         return error.InvalidJson;
     }
 };
-
-/// A real number read from the input.
-const Real = struct {
-    value: f64,
-    end: usize,
-};
-
-/// Converts a scanned real to `f64`.
-///
-/// This is `noinline` on purpose: inlining the float converter into
-/// `scanNumber` gives every integer the converter's large stack frame and
-/// register spills, which costs more than the call.
-noinline fn parseReal(input: []const u8, start: usize) Error!Real {
-    const number = float.parseNumber(f64, input, start) catch return error.InvalidJson;
-    if (!std.math.isFinite(number.value)) return error.InvalidJson;
-    return .{ .value = number.value, .end = number.end };
-}
 
 /// Test helper: pads `input`, parses it, and hands back the buffer whose bytes
 /// string offsets refer to.

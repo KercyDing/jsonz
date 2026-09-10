@@ -6,14 +6,14 @@
 //! complete slice, and the `(mantissa, exponent)` form its converter consumes
 //! is private.
 //!
-//! The conversion code under `parse_float/` is vendored from the Zig standard
+//! The conversion code under `vendor/` is vendored from the Zig standard
 //! library.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const common = @import("parse_float/common.zig");
-const FloatInfo = @import("parse_float/FloatInfo.zig");
-const convertEiselLemire = @import("parse_float/convert_eisel_lemire.zig").convertEiselLemire;
+const common = @import("vendor/common.zig");
+const FloatInfo = @import("vendor/FloatInfo.zig");
+const convertEiselLemire = @import("vendor/convert_eisel_lemire.zig").convertEiselLemire;
 
 /// Errors reported while scanning a JSON number.
 ///

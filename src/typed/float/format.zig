@@ -16,7 +16,7 @@
 //! exponent range.
 
 const std = @import("std");
-const eisel_lemire = @import("parse_float/convert_eisel_lemire.zig");
+const eisel_lemire = @import("vendor/convert_eisel_lemire.zig");
 
 pub const Error = error{
     /// `buf` cannot hold the longest form of this value.

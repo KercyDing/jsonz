@@ -1,6 +1,6 @@
 const std = @import("std");
 const kind = @import("kind.zig");
-const format_float = @import("format_float.zig");
+const float = @import("float/root.zig");
 
 pub const Options = struct {
     /// Format arrays and objects with indentation and line breaks.
@@ -41,19 +41,19 @@ pub const Serializer = struct {
         if (!std.math.isFinite(value)) return self.serializeNull();
 
         // `f32` and `f64` have a fused formatter; anything else falls through.
-        if (comptime format_float.maxLength(@TypeOf(value)) != 0) {
-            const capacity = comptime format_float.maxLength(@TypeOf(value));
+        if (comptime float.maxNumberLength(@TypeOf(value)) != 0) {
+            const capacity = comptime float.maxNumberLength(@TypeOf(value));
             if (self.writer.unusedCapacityLen() >= capacity) {
                 // Render straight into the writer's spare room, like `print`
                 // does, rather than into a stack buffer that is then copied.
                 const space = self.writer.unusedCapacitySlice();
-                if (format_float.write(space, value)) |text| {
+                if (float.formatNumber(space, value)) |text| {
                     self.writer.advance(text.len);
                     return;
                 } else |_| {}
             } else {
                 var buffer: [capacity]u8 = undefined;
-                if (format_float.write(&buffer, value)) |text| {
+                if (float.formatNumber(&buffer, value)) |text| {
                     return self.writer.writeAll(text);
                 } else |_| {}
             }

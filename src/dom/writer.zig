@@ -25,6 +25,20 @@ const digit_pairs: [200]u8 = blk: {
     break :blk table;
 };
 
+/// Bytes checked at once while scanning a string for characters to escape.
+const escape_chunk = 32;
+const EscapeVector = @Vector(escape_chunk, u8);
+
+/// Bit `i` is set when byte `i` of the chunk needs an escape: a quote, a
+/// backslash, or a control byte. DEL and non-ASCII bytes are copied through,
+/// so unlike the reader's equivalent this ignores the high bit.
+inline fn escapeMask(bytes: EscapeVector) u32 {
+    const quote = bytes == @as(EscapeVector, @splat('"'));
+    const backslash = bytes == @as(EscapeVector, @splat('\\'));
+    const control = bytes < @as(EscapeVector, @splat(0x20));
+    return @bitCast(quote | backslash | control);
+}
+
 /// A growable output buffer with an unchecked `reserve` + write split.
 ///
 /// Like yyjson's writer, each value reserves the most bytes it can produce and
@@ -233,6 +247,11 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 /// yyjson's default writer escapes `"`, `\`, and the C0 control characters,
 /// using uppercase hex for `\u00XX`; every other byte, including DEL and any
 /// valid multi-byte sequence, is copied through.
+///
+/// A string that came in with an escape sequence has to be re-scanned, and on
+/// documents with long escaped text that scan is most of the writer's work, so
+/// it runs 32 bytes at a time and only falls back to a byte loop for the last
+/// partial chunk.
 inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
     const offset: usize = @intCast(item.uni.offset);
     const bytes = input[offset..][0..pool_mod.valueLen(item)];
@@ -246,30 +265,50 @@ inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) 
         return;
     }
 
-    const digits = "0123456789ABCDEF";
+    // Bytes already copied through: everything before `index` that did not need
+    // escaping is still pending, so the copy happens once per escape instead of
+    // once per chunk.
     var start: usize = 0;
     var index: usize = 0;
+    while (index + escape_chunk <= bytes.len) {
+        const mask = escapeMask(bytes[index..][0..escape_chunk].*);
+        if (mask == 0) {
+            index += escape_chunk;
+            continue;
+        }
+        index += @ctz(mask);
+        buffer.putAll(bytes[start..index]);
+        writeEscape(buffer, bytes[index]);
+        index += 1;
+        start = index;
+    }
     while (index < bytes.len) : (index += 1) {
         const byte = bytes[index];
         if (byte >= 0x20 and byte != '"' and byte != '\\') continue;
         buffer.putAll(bytes[start..index]);
-        switch (byte) {
-            '"' => buffer.putAll("\\\""),
-            '\\' => buffer.putAll("\\\\"),
-            0x08 => buffer.putAll("\\b"),
-            0x0c => buffer.putAll("\\f"),
-            '\n' => buffer.putAll("\\n"),
-            '\r' => buffer.putAll("\\r"),
-            '\t' => buffer.putAll("\\t"),
-            else => buffer.putAll(&.{
-                '\\',              'u',                 '0', '0',
-                digits[byte >> 4], digits[byte & 0x0f],
-            }),
-        }
+        writeEscape(buffer, byte);
         start = index + 1;
     }
     buffer.putAll(bytes[start..]);
     buffer.put('"');
+}
+
+/// Writes the escape sequence for one byte that JSON cannot carry literally.
+inline fn writeEscape(buffer: *Buffer, byte: u8) void {
+    const digits = "0123456789ABCDEF";
+    switch (byte) {
+        '"' => buffer.putAll("\\\""),
+        '\\' => buffer.putAll("\\\\"),
+        0x08 => buffer.putAll("\\b"),
+        0x0c => buffer.putAll("\\f"),
+        '\n' => buffer.putAll("\\n"),
+        '\r' => buffer.putAll("\\r"),
+        '\t' => buffer.putAll("\\t"),
+        else => buffer.putAll(&.{
+            '\\',              'u',                 '0', '0',
+            digits[byte >> 4], digits[byte & 0x0f],
+        }),
+    }
 }
 
 inline fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
@@ -402,4 +441,37 @@ fn expectWrite(expected: []const u8, input: []const u8, pretty: bool) !void {
     const output = try document.toSlice(std.testing.allocator, .{ .pretty = pretty });
     defer std.testing.allocator.free(output);
     try std.testing.expectEqualStrings(expected, output);
+}
+
+test "escapes across vector chunks" {
+    // Canonical escapes sitting at offsets that straddle the 32-byte scan
+    // chunk must round-trip byte for byte.
+    const pieces = [_][]const u8{
+        "\\n", "\\u0001", "\\\"", "\\\\", "\\t", "\\r", "\\b", "\\f",
+    };
+    for ([_]usize{ 0, 15, 30, 31, 32, 33, 62, 63, 64, 65, 96 }) |offset| {
+        var buffer: [512]u8 = undefined;
+        var length: usize = 0;
+        buffer[length] = '"';
+        length += 1;
+        for (0..offset) |_| {
+            buffer[length] = 'a';
+            length += 1;
+        }
+        for (pieces) |piece| {
+            @memcpy(buffer[length..][0..piece.len], piece);
+            length += piece.len;
+        }
+        // A plain run longer than one chunk between escapes.
+        for (0..70) |_| {
+            buffer[length] = 'b';
+            length += 1;
+        }
+        @memcpy(buffer[length..][0..2], "\\n");
+        length += 2;
+        buffer[length] = '"';
+        length += 1;
+        const input = buffer[0..length];
+        try expectWrite(input, input, false);
+    }
 }

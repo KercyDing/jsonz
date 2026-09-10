@@ -1,5 +1,6 @@
 const std = @import("std");
 const kind = @import("kind.zig");
+const format_float = @import("format_float.zig");
 
 pub const Options = struct {
     /// Format arrays and objects with indentation and line breaks.
@@ -37,11 +38,16 @@ pub const Serializer = struct {
 
     /// Serializes a finite floating-point value, or JSON `null` for NaN and infinities.
     pub fn serializeFloat(self: *Serializer, value: anytype) std.Io.Writer.Error!void {
-        if (std.math.isFinite(value)) {
-            try self.writer.print("{d}", .{value});
-        } else {
-            try self.serializeNull();
+        if (!std.math.isFinite(value)) return self.serializeNull();
+
+        // `f32` and `f64` have a fused formatter; anything else falls through.
+        if (comptime format_float.maxLength(@TypeOf(value)) != 0) {
+            var buffer: [format_float.maxLength(@TypeOf(value))]u8 = undefined;
+            if (format_float.write(&buffer, value)) |text| {
+                return self.writer.writeAll(text);
+            } else |_| {}
         }
+        try self.writer.print("{d}", .{value});
     }
 
     /// Serializes a UTF-8 byte slice as a JSON string with required escapes.

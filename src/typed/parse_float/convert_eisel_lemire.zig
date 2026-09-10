@@ -8,6 +8,11 @@
 //!
 //! Zig is MIT licensed: <https://github.com/ziglang/zig/blob/master/LICENSE>.
 //! `typed/float.zig` documents why this copy exists.
+//!
+//! One local change: the power table below is `pub`, so that
+//! `typed/format_float.zig` can check the table it generates at comptime
+//! against this one. The normalised significand of `5^k` and of `10^k` are the
+//! same bits, so this table doubles as the decimal formatter's power table.
 
 const std = @import("std");
 const math = std.math;
@@ -199,7 +204,7 @@ fn computeProductApprox(q: i64, w: u64, comptime precision: usize) U128 {
 // Eisel-Lemire tables ~10Kb
 const eisel_lemire_smallest_power_of_five = -342;
 const eisel_lemire_largest_power_of_five = 308;
-const eisel_lemire_table_powers_of_five_128 = [_]U128{
+pub const eisel_lemire_table_powers_of_five_128 = [_]U128{
     U128.new(0xeef453d6923bd65a, 0x113faa2906a13b3f), // 5^-342
     U128.new(0x9558b4661b6565f8, 0x4ac7ca59a424c507), // 5^-341
     U128.new(0xbaaee17fa23ebf76, 0x5d79bcf00d2df649), // 5^-340

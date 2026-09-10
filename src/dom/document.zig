@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const pool_mod = @import("pool.zig");
 const reader = @import("reader.zig");
 const value = @import("value.zig");
@@ -151,8 +152,19 @@ pub const Document = struct {
 ///
 /// Use `parseWith` to control the allocator, or `parseInto` to parse without
 /// any allocator at all. Call `Document.deinit` to release the result.
+/// The allocator `parse` uses on its own.
+///
+/// When the program links libc this is `std.heap.c_allocator`: parsing allocates
+/// and frees a whole document each time, and malloc reuses those blocks while
+/// Zig's page-based allocator returns them to the OS and faults them back in on
+/// the next parse. Without libc it falls back to `std.heap.smp_allocator`.
+pub const default_allocator: std.mem.Allocator = if (builtin.link_libc)
+    std.heap.c_allocator
+else
+    std.heap.smp_allocator;
+
 pub fn parse(input: []const u8, options: ParseOptions) ParseError!Document {
-    return parseWith(std.heap.smp_allocator, input, options);
+    return parseWith(default_allocator, input, options);
 }
 
 /// Parses JSON into an owned DOM document allocated with `allocator`.

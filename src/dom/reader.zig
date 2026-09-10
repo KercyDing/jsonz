@@ -415,7 +415,7 @@ const Reader = struct {
         }
     }
 
-    fn openContainer(
+    inline fn openContainer(
         self: *Reader,
         value_type: Type,
         parent: ?u32,
@@ -442,7 +442,7 @@ const Reader = struct {
         };
     }
 
-    fn closeContainer(self: *Reader, container: u32, count: usize, pos: usize) Error!Closed {
+    inline fn closeContainer(self: *Reader, container: u32, count: usize, pos: usize) Error!Closed {
         const value = self.pool.at(container).*;
         const value_type = pool_mod.valueType(value);
         const parent = container - @as(u32, @intCast(value.uni.offset / pool_mod.value_size));

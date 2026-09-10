@@ -42,10 +42,21 @@ pub const Serializer = struct {
 
         // `f32` and `f64` have a fused formatter; anything else falls through.
         if (comptime format_float.maxLength(@TypeOf(value)) != 0) {
-            var buffer: [format_float.maxLength(@TypeOf(value))]u8 = undefined;
-            if (format_float.write(&buffer, value)) |text| {
-                return self.writer.writeAll(text);
-            } else |_| {}
+            const capacity = comptime format_float.maxLength(@TypeOf(value));
+            if (self.writer.unusedCapacityLen() >= capacity) {
+                // Render straight into the writer's spare room, like `print`
+                // does, rather than into a stack buffer that is then copied.
+                const space = self.writer.unusedCapacitySlice();
+                if (format_float.write(space, value)) |text| {
+                    self.writer.advance(text.len);
+                    return;
+                } else |_| {}
+            } else {
+                var buffer: [capacity]u8 = undefined;
+                if (format_float.write(&buffer, value)) |text| {
+                    return self.writer.writeAll(text);
+                } else |_| {}
+            }
         }
         try self.writer.print("{d}", .{value});
     }
@@ -383,4 +394,55 @@ test "pretty struct fields" {
     defer testing.allocator.free(output);
 
     try testing.expectEqualStrings("{\n  \"value\": 1\n}", output);
+}
+
+test "float fields" {
+    // Drives the fused formatter through the public entry point, including the
+    // shapes that have to fall back to `std.fmt`.
+    const Value = struct {
+        whole: f64,
+        fraction: f64,
+        single: f32,
+        not_a_number: f64,
+        infinite: f32,
+    };
+
+    const value = Value{
+        .whole = 1,
+        .fraction = -65.613616999999977,
+        .single = 3.4028235e38,
+        .not_a_number = std.math.nan(f64),
+        .infinite = std.math.inf(f32),
+    };
+    const output = try toSlice(testing.allocator, value, .{});
+    defer testing.allocator.free(output);
+
+    try testing.expectEqualStrings(
+        "{\"whole\":1,\"fraction\":-65.61361699999998," ++
+            "\"single\":340282350000000000000000000000000000000," ++
+            "\"not_a_number\":null,\"infinite\":null}",
+        output,
+    );
+}
+
+test "extreme floats match std.fmt" {
+    // Values whose decimal form runs to hundreds of digits, checked against the
+    // `{d}` output the serializer used before it had a fused formatter.
+    const Value = struct { big: f64, small: f64, subnormal: f32 };
+    const value = Value{ .big = 1.7976931348623157e308, .small = 5e-324, .subnormal = 1e-45 };
+
+    const output = try toSlice(testing.allocator, value, .{});
+    defer testing.allocator.free(output);
+
+    var reference: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reference.deinit();
+    try reference.writer.writeAll("{\"big\":");
+    try reference.writer.print("{d}", .{value.big});
+    try reference.writer.writeAll(",\"small\":");
+    try reference.writer.print("{d}", .{value.small});
+    try reference.writer.writeAll(",\"subnormal\":");
+    try reference.writer.print("{d}", .{value.subnormal});
+    try reference.writer.writeAll("}");
+
+    try testing.expectEqualStrings(reference.written(), output);
 }

@@ -311,8 +311,8 @@ inline fn roundToOdd32(significand: u64, scaled: u32) u32 {
     return high | @intFromBool(low > 1);
 }
 
-/// Renders `decimal` in the layout `std.fmt`'s decimal mode uses: plain digits,
-/// a decimal point placed by position, and no exponent.
+/// Renders `decimal` in the layout `std.fmt`'s decimal mode uses: plain
+/// digits, a decimal point placed by position, and no exponent.
 fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
     // The digit selection is shortest but may leave trailing zeros: `1.0`
     // arrives as `10000000000000000e-16`. Dropping them never changes the value
@@ -324,10 +324,7 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
         exponent += 1;
     }
 
-    var scratch: [24]u8 = undefined;
-    const length = writeDigits(&scratch, significand);
-    const digit_text = scratch[24 - length ..];
-
+    const length = digitCount(significand);
     const point = exponent + @as(i32, @intCast(length));
     const sign: usize = @intFromBool(negative);
     const required: usize = sign + if (point <= 0)
@@ -338,59 +335,73 @@ fn emit(buf: []u8, negative: bool, decimal: Decimal) Error![]const u8 {
         length + 1;
     if (buf.len < required) return error.BufferTooSmall;
 
-    var index = sign;
     if (negative) buf[0] = '-';
 
     if (point <= 0) {
         // 0.0001234
-        buf[index] = '0';
-        buf[index + 1] = '.';
-        index += 2;
         const zeros: usize = @intCast(-point);
-        @memset(buf[index..][0..zeros], '0');
-        index += zeros;
-        @memcpy(buf[index..][0..length], digit_text);
-        index += length;
-    } else if (point >= @as(i32, @intCast(length))) {
+        buf[sign] = '0';
+        buf[sign + 1] = '.';
+        @memset(buf[sign + 2 ..][0..zeros], '0');
+        writeDigits(buf[sign + 2 + zeros ..], significand, length);
+        return buf[0 .. sign + 2 + zeros + length];
+    }
+
+    if (point >= @as(i32, @intCast(length))) {
         // 123400000
         const zeros: usize = @as(usize, @intCast(point)) - length;
-        @memcpy(buf[index..][0..length], digit_text);
-        index += length;
-        @memset(buf[index..][0..zeros], '0');
-        index += zeros;
-    } else {
-        // 123.456
-        const head: usize = @intCast(point);
-        @memcpy(buf[index..][0..head], digit_text[0..head]);
-        buf[index + head] = '.';
-        @memcpy(buf[index + head + 1 ..][0 .. length - head], digit_text[head..]);
-        index += length + 1;
+        writeDigits(buf[sign..], significand, length);
+        @memset(buf[sign + length ..][0..zeros], '0');
+        return buf[0 .. sign + length + zeros];
     }
-    return buf[0..index];
+
+    // 123.456. Writing the digits one byte late leaves every digit after the
+    // point already in its final place, so only the digits before it have to
+    // move, and only by one byte. `moveBack` reads each word before storing it,
+    // which keeps the overlap harmless.
+    const head: usize = @intCast(point);
+    writeDigits(buf[sign + 1 ..], significand, length);
+    moveBack(buf[sign..], buf[sign + 1 ..], head);
+    buf[sign + head] = '.';
+    return buf[0 .. sign + length + 1];
 }
 
-/// Writes `value` right-aligned into `scratch` and returns its digit count.
-fn writeDigits(scratch: *[24]u8, value: u64) usize {
-    const length = digitCount(value);
-    const start = scratch.len - length;
-    var end = scratch.len;
-    var rest = value;
+/// Copies `count` bytes from `source` to `destination`, where `destination`
+/// starts `count` bytes earlier.
+fn moveBack(destination: []u8, source: []const u8, count: usize) void {
+    var copied: usize = 0;
+    while (copied + 8 <= count) : (copied += 8) {
+        const word: u64 = @bitCast(source[copied..][0..8].*);
+        destination[copied..][0..8].* = @bitCast(word);
+    }
+    while (copied < count) : (copied += 1) destination[copied] = source[copied];
+}
 
-    while (end - start >= 8) {
-        end -= 8;
-        writeEight(scratch[end..][0..8], @intCast(rest % 100_000_000));
+/// Writes the `length` digits of `value` into `buf[0..length]`, most
+/// significant digit first.
+fn writeDigits(buf: []u8, value: u64, length: usize) void {
+    // A significand has at most 17 digits, so one 64-bit split leaves a high
+    // part that fits in 32 bits and the rest can use cheaper 32-bit arithmetic.
+    var rest = value;
+    var index = length;
+    if (index > 8) {
+        index -= 8;
+        writeEight(buf[index..][0..8], @intCast(rest % 100_000_000));
         rest /= 100_000_000;
     }
 
     var small: u32 = @intCast(rest);
-    while (end - start >= 2) {
-        end -= 2;
-        writeTwo(scratch[end..][0..2], @intCast(small % 100));
+    if (index >= 8) {
+        index -= 8;
+        writeEight(buf[index..][0..8], small % 100_000_000);
+        small /= 100_000_000;
+    }
+    while (index >= 2) {
+        index -= 2;
+        writeTwo(buf[index..][0..2], @intCast(small % 100));
         small /= 100;
     }
-    if (end != start) scratch[start] = '0' + @as(u8, @intCast(small));
-
-    return length;
+    if (index == 1) buf[0] = '0' + @as(u8, @intCast(small));
 }
 
 /// Number of decimal digits in `value`, which must not be zero.

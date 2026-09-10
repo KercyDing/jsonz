@@ -8,10 +8,10 @@ A tiny, high-performance JSON library for Zig.
 
 ## Install
 
-Add the stable `0.4.0` release:
+Add the stable `0.4.1` release:
 
 ```sh
-zig fetch --save git+https://github.com/KercyDing/jsonz#v0.4.0
+zig fetch --save git+https://github.com/KercyDing/jsonz#v0.4.1
 ```
 
 Or track `main`:

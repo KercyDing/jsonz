@@ -156,3 +156,63 @@ fn writeObject(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) an
     }
     try out.append(std.testing.allocator, '}');
 }
+
+test "JSON diagnostic parity fuzz" {
+    try std.testing.fuzz({}, fuzzParity, .{});
+}
+
+/// Generates a value, damages it, and requires `jsonz.diagnostic` to agree with
+/// `jsonz.dom` about whether the result is valid JSON.
+fn fuzzParity(_: void, smith: *std.testing.Smith) !void {
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(std.testing.allocator);
+    try writeValue(smith, &input, 0);
+    mutate(smith, &input);
+
+    const accepts = blk: {
+        var document = jsonz.dom.parseWith(std.testing.allocator, input.items, .{}) catch |failure| switch (failure) {
+            error.InvalidJson => break :blk false,
+            error.OutOfMemory => return failure,
+        };
+        document.deinit();
+        break :blk true;
+    };
+
+    const valid = jsonz.diagnostic.isValid(input.items, .{});
+    if (accepts != valid) {
+        std.debug.print("dom and diagnostic disagree on {s} (dom accepts: {}, isValid: {})\n", .{
+            input.items,
+            accepts,
+            valid,
+        });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn mutate(smith: *std.testing.Smith, input: *std.ArrayList(u8)) void {
+    const rounds = smith.valueRangeAtMost(u8, 0, 3);
+    for (0..rounds) |_| {
+        if (input.items.len == 0) return;
+        switch (smith.valueRangeAtMost(u8, 0, 2)) {
+            0 => {
+                const replacements = [_]u8{
+                    ',', ':', '{', '}', '[', ']', '"',  '\\', '0',  '9',
+                    'e', '-', '+', '.', 'x', ' ', '\n', '\t', 0x01, 0xff,
+                };
+                const index = smith.valueRangeAtMost(u32, 0, @intCast(input.items.len - 1));
+                input.items[index] = replacements[smith.valueRangeAtMost(u8, 0, replacements.len - 1)];
+            },
+            1 => {
+                input.shrinkRetainingCapacity(smith.valueRangeAtMost(u32, 0, @intCast(input.items.len)));
+            },
+            else => {
+                const insertions = [_]u8{
+                    ',', '"', '\\', '{', '}', '[', ']', 'x', '1', ' ', 0x7f, 0xc3,
+                };
+                const index = smith.valueRangeAtMost(u32, 0, @intCast(input.items.len));
+                const byte = insertions[smith.valueRangeAtMost(u8, 0, insertions.len - 1)];
+                input.insert(std.testing.allocator, index, byte) catch return;
+            },
+        }
+    }
+}

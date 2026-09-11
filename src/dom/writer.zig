@@ -97,14 +97,9 @@ const Buffer = struct {
         try self.list.ensureTotalCapacity(self.allocator, required);
     }
 
-    /// Appends one byte. Writing to the unused capacity directly keeps the
-    /// write a store; `appendAssumeCapacity` and `appendSliceAssumeCapacity`
-    /// are separate functions in the standard library, so routing through them
-    /// turns every byte and every short escape run into a call.
+    /// Appends one byte; callers reserve capacity before writing.
     inline fn put(self: *Buffer, byte: u8) void {
-        const index = self.list.items.len;
-        self.list.items.len = index + 1;
-        self.list.items.ptr[index] = byte;
+        self.list.appendAssumeCapacity(byte);
     }
 
     inline fn putAll(self: *Buffer, bytes: []const u8) void {

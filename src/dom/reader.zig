@@ -85,8 +85,6 @@ const State = enum {
     array_value,
     array_end,
     object_key,
-    object_colon,
-    object_value,
     object_end,
     done,
 };
@@ -337,23 +335,6 @@ const Reader = struct {
                         }
                     }
                     continue;
-                },
-                .object_colon => {
-                    if (pos == self.end or input[pos] != ':') return error.InvalidJson;
-                    pos += 1;
-                    state = .object_value;
-                },
-                .object_value => {
-                    const scanned = try self.scanValue(current, count, pos);
-                    pos = scanned.pos;
-                    if (scanned.container) |container_state| {
-                        current = scanned.index;
-                        count = 0;
-                        state = container_state;
-                    } else {
-                        count += 1;
-                        state = .object_end;
-                    }
                 },
                 .object_end => {
                     if (pos == self.end) return error.InvalidJson;

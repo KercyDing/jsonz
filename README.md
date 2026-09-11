@@ -249,17 +249,24 @@ Write options:
 | `diagnostic.toSlice`   | Return the report as a new slice, or `null` if valid.  |
 | `diagnostic.diagnose`  | Low level: return the problem and where it is.         |
 
-All five take one `Options`: the first two fields decide what counts as valid
-JSON, the rest shape the report.
+`isValid` and `diagnose` take the check options, which decide what counts as
+valid JSON:
 
-| Field                   | Description                                                |
-| ----------------------- | ---------------------------------------------------------- |
-| `allow_comments`        | Accept C-style comments. Defaults to `false`.              |
-| `allow_trailing_commas` | Accept a trailing comma in an object or array.             |
-| `enable_color`          | Emit ANSI styles. Never probes the terminal.               |
-| `source_name`           | Name shown in the header. Defaults to `<input>`.           |
-| `context_lines`         | Source lines shown above and below. Defaults to `3`.       |
-| `max_line_width`        | Cut longer source lines around the problem. `0` shows all. |
+| Field                   | Description                                    |
+| ----------------------- | ---------------------------------------------- |
+| `allow_comments`        | Accept C-style comments. Defaults to `false`.  |
+| `allow_trailing_commas` | Accept a trailing comma in an object or array. |
+
+`print`, `printWith` and `toSlice` take the report options, which include the
+check options for documents read with extensions enabled:
+
+| Field            | Description                                                |
+| ---------------- | ---------------------------------------------------------- |
+| `check`          | Check options for this document; defaults to `.{}`.        |
+| `enable_color`   | Emit ANSI styles. Never probes the terminal.               |
+| `source_name`    | Name shown in the header. Defaults to `<input>`.           |
+| `context_lines`  | Source lines shown above and below. Defaults to `3`.       |
+| `max_line_width` | Cut longer source lines around the problem. `0` shows all. |
 
 ## Development
 

@@ -29,16 +29,26 @@ pub const Problem = error_mod.Problem;
 /// One format problem and where it is.
 pub const Diagnostic = error_mod.Diagnostic;
 
-/// Options for `diagnose`, `isValid`, `print`, `printWith` and `toSlice`.
-///
-/// The first two decide what counts as valid JSON; the rest only shape the
-/// report, and `isValid` ignores them.
+/// Options for `isValid` and `diagnose`: what counts as valid JSON.
 pub const Options = struct {
     /// Accept `//` and `/* ... */` comments, which are not part of standard JSON.
     allow_comments: bool = false,
     /// Accept a comma before a closing `]` or `}`, which is not part of standard JSON.
     allow_trailing_commas: bool = false,
 
+    fn checkOptions(self: Options) check_mod.CheckOptions {
+        return .{
+            .allow_comments = self.allow_comments,
+            .allow_trailing_commas = self.allow_trailing_commas,
+        };
+    }
+};
+
+/// Options for `print`, `printWith` and `toSlice`: how the report looks.
+pub const ReportOptions = struct {
+    /// What counts as valid JSON for this document, so that a document read
+    /// with extensions enabled is not reported as broken.
+    check: Options = .{},
     /// Emit ANSI styles; the library never probes the terminal.
     enable_color: bool = false,
     /// Name shown in the header, e.g. `config.json:3:18: error: …`.
@@ -48,14 +58,7 @@ pub const Options = struct {
     /// Cut a source line wider than this around the problem; 0 shows all of it.
     max_line_width: usize = 200,
 
-    fn checkOptions(self: Options) check_mod.CheckOptions {
-        return .{
-            .allow_comments = self.allow_comments,
-            .allow_trailing_commas = self.allow_trailing_commas,
-        };
-    }
-
-    fn renderOptions(self: Options) render_mod.RenderOptions {
+    fn renderOptions(self: ReportOptions) render_mod.RenderOptions {
         return .{
             .enable_color = self.enable_color,
             .source_name = self.source_name,
@@ -78,7 +81,7 @@ pub fn isValid(input: []const u8, options: Options) bool {
 
 /// Writes the first format problem in `input` to standard error, and nothing
 /// when the input is valid. It locks standard error for the caller.
-pub fn print(input: []const u8, options: Options) std.Io.Writer.Error!void {
+pub fn print(input: []const u8, options: ReportOptions) std.Io.Writer.Error!void {
     var buffer: [1024]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer);
     defer std.debug.unlockStderr();
@@ -89,17 +92,17 @@ pub fn print(input: []const u8, options: Options) std.Io.Writer.Error!void {
 /// report is streamed, so nothing is allocated and its size is unbounded.
 pub fn printWith(
     input: []const u8,
-    options: Options,
+    options: ReportOptions,
     writer: *std.Io.Writer,
 ) std.Io.Writer.Error!void {
-    const diagnostic = diagnose(input, options) orelse return;
+    const diagnostic = diagnose(input, options.check) orelse return;
     return render_mod.render(diagnostic, input, writer, options.renderOptions());
 }
 
 /// Renders the report into a slice owned by `allocator`, or returns null when
 /// the input is valid JSON.
-pub fn toSlice(allocator: std.mem.Allocator, input: []const u8, options: Options) !?[]const u8 {
-    const diagnostic = diagnose(input, options) orelse return null;
+pub fn toSlice(allocator: std.mem.Allocator, input: []const u8, options: ReportOptions) !?[]const u8 {
+    const diagnostic = diagnose(input, options.check) orelse return null;
     return try render_mod.toSlice(allocator, diagnostic, input, options.renderOptions());
 }
 
@@ -119,7 +122,7 @@ test "streaming and slicing agree" {
     input[10_000] = '}';
     input[input.len - 1] = ']';
 
-    const options: Options = .{ .source_name = "long.json", .max_line_width = 0 };
+    const options: ReportOptions = .{ .source_name = "long.json", .max_line_width = 0 };
     const slice = (try toSlice(allocator, input, options)).?;
     defer allocator.free(slice);
 

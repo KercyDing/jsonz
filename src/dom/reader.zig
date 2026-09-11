@@ -210,8 +210,9 @@ const Reader = struct {
                             ',' => {
                                 pos += 1;
                                 // Likewise, the next element usually starts
-                                // right after the comma.
-                                if (space_table[input[pos]]) pos = try self.skipTrivia(pos);
+                                // right after the comma; a comment needs the
+                                // slower trivia scan.
+                                if (space_table[input[pos]] or (self.options.allow_comments and input[pos] == '/')) pos = try self.skipTrivia(pos);
                                 if (pos < self.end and input[pos] == ']') {
                                     if (!self.options.allow_trailing_commas) return error.InvalidJson;
                                     pos += 1;
@@ -892,6 +893,14 @@ test "comments" {
     defer result[0].deinit();
     defer std.testing.allocator.free(result[2]);
     try std.testing.expectEqual(@as(usize, 3), result[0].items().len);
+
+    // A comment may follow the comma of an array element, not just its value.
+    var arrays = "[1,// c\n2,/* c */3]".*;
+    try std.testing.expectError(error.InvalidJson, readWithOptions(&arrays, .{}, std.testing.allocator));
+    var commented = try readWithOptions(&arrays, .{ .allow_comments = true }, std.testing.allocator);
+    defer commented[0].deinit();
+    defer std.testing.allocator.free(commented[2]);
+    try std.testing.expectEqual(@as(usize, 4), commented[0].items().len);
 }
 
 test "unicode escapes" {

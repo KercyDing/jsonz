@@ -51,8 +51,8 @@ pub fn build(b: *std.Build) void {
     const integration_tests = b.addTest(.{ .root_module = integration_tests_mod });
     test_step.dependOn(&b.addRunArtifact(integration_tests).step);
 
-    // The fuzz targets run until stopped, so they get a step of their own:
-    // `zig build fuzzy --fuzz`. The plain test suite stays finite.
+    // The fuzz targets get a step of their own: `zig build fuzzy --fuzz[=limit]`.
+    // The plain test suite stays finite.
     const fuzzy_step = b.step("fuzzy", "Run fuzz tests");
     const fuzzy_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/fuzzy_tests.zig"),

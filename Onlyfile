@@ -12,9 +12,10 @@ build():
 test():
     zig build test
 
-[help] Run infinite fuzzy tests with the Zig web UI
-fuzzy():
-    zig build fuzzy --fuzz -Doptimize=ReleaseFast
+[help] Run fuzzy tests
+[desc] Pass the iteration limit per target, e.g. `only fuzzy 10000`.
+fuzzy(iterations = "10000000"):
+    zig build fuzzy --fuzz={{iterations}} -Doptimize=ReleaseFast
 
 [help] Run benchmarks
 [desc] Use `only bench typed` to enable typed mode.

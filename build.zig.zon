@@ -1,6 +1,6 @@
 .{
     .name = .jsonz,
-    .version = "0.5.0",
+    .version = "0.5.1",
     .fingerprint = 0x640fc5959ef13f0c,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{

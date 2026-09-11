@@ -26,7 +26,7 @@ const typed_datasets = [_][]const u8{
     "twitterescaped.json",
 };
 
-const Mode = enum { dynamic, typed };
+const Mode = enum { dom, typed };
 
 const Timing = struct {
     elapsed: u64,
@@ -132,9 +132,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer args.deinit();
     _ = args.skip();
 
-    const mode_arg = args.next() orelse "dynamic";
-    const mode = if (std.mem.eql(u8, mode_arg, "dynamic"))
-        Mode.dynamic
+    const mode_arg = args.next() orelse "dom";
+    const mode = if (std.mem.eql(u8, mode_arg, "dom"))
+        Mode.dom
     else if (std.mem.eql(u8, mode_arg, "typed"))
         Mode.typed
     else if (std.mem.eql(u8, mode_arg, "--help")) {
@@ -156,7 +156,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     if (selected_file) |file| {
-        if (mode == .dynamic and !isDataset(file)) return error.InvalidArguments;
+        if (mode == .dom and !isDataset(file)) return error.InvalidArguments;
         if (mode == .typed and !isTypedDataset(file)) return error.InvalidArguments;
     }
 
@@ -168,7 +168,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var std_decode_geomean = GeometricMean{};
     var std_encode_geomean = GeometricMean{};
 
-    const active_datasets = if (mode == .dynamic) datasets[0..] else typed_datasets[0..];
+    const active_datasets = if (mode == .dom) datasets[0..] else typed_datasets[0..];
     for (active_datasets) |name| {
         if (selected_file) |file| if (!std.mem.eql(u8, file, name)) continue;
 
@@ -185,23 +185,23 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const repeats = repeatCount(input.len);
         std.debug.print("\n{s} ({d} bytes, {d} repeats)\n", .{ name, input.len, repeats });
 
-        const jsonz_decode = if (mode == .dynamic)
+        const jsonz_decode = if (mode == .dom)
             try benchJsonz(input, repeats)
         else
             try benchJsonzTyped(name, input, repeats);
-        const jsonz_encode = if (mode == .dynamic)
+        const jsonz_encode = if (mode == .dom)
             try benchJsonzEncode(input, repeats)
         else
             try benchJsonzTypedEncode(name, input, repeats);
         const std_decode: ?u64 = if (jsonz_only)
             null
-        else if (mode == .dynamic)
+        else if (mode == .dom)
             try benchStd(input, repeats)
         else
             try benchStdTyped(name, input, repeats);
         const std_encode: ?Timing = if (jsonz_only)
             null
-        else if (mode == .dynamic)
+        else if (mode == .dom)
             try benchStdEncode(input, repeats)
         else
             try benchStdTypedEncode(name, input, repeats);
@@ -232,8 +232,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
 fn printHelp() void {
     std.debug.print(
-        "usage: jsonz-bench [dynamic|typed] [--file name.json]\n" ++
-            "\n  dynamic  parse every dataset into a generic JSON value (default)\n" ++
+        "usage: jsonz-bench [dom|typed] [--file name.json]\n" ++
+            "\n  dom  parse every dataset into a generic JSON value (default)\n" ++
             "  typed    parse datasets with a known Zig type\n" ++
             "  --file  run one dataset instead of all datasets\n" ++
             "  --jsonz-only  skip the std.json comparison\n",

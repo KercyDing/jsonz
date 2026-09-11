@@ -62,7 +62,7 @@ def print_summary(results: dict[str, list[dict[str, float]]]) -> None:
 
 
 def main() -> int:
-    mode = "dynamic"
+    mode = "dom"
     base = "HEAD"
     args = sys.argv[1:]
     index = 0

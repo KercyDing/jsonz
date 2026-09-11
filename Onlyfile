@@ -20,7 +20,7 @@ fuzzy(iterations = "100000"):
 [help] Run benchmarks
 [desc] Use `only bench typed` to enable typed mode.
 [fail] Benchmarks failed.
-bench(mode = "dynamic"):
+bench(mode = "dom"):
     zig build bench -Dmode={{mode}}
 
 [help] Run zBench microbenchmarks

@@ -82,16 +82,16 @@ fn addBench(
     const bench_step = b.step("bench", "Run benchmarks");
 
     const mode =
-        b.option([]const u8, "mode", "Benchmark mode: dynamic or typed") orelse
-        "dynamic";
+        b.option([]const u8, "mode", "Benchmark mode: dom or typed") orelse
+        "dom";
 
     const file =
         b.option([]const u8, "file", "Run one benchmark dataset");
 
-    if (!std.mem.eql(u8, mode, "dynamic") and
+    if (!std.mem.eql(u8, mode, "dom") and
         !std.mem.eql(u8, mode, "typed"))
     {
-        @panic("-Dmode must be dynamic or typed");
+        @panic("-Dmode must be dom or typed");
     }
 
     const float_mod = b.createModule(.{

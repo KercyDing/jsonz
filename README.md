@@ -6,6 +6,8 @@ A tiny, high-performance JSON library for Zig.
 
 `jsonz.dom` provides a high-performance DOM for arbitrary JSON, a Zig port of [yyjson](https://github.com/ibireme/yyjson).
 
+`jsonz.diagnostic` reviews JSON and points at the first format problem, with a line number and a snippet.
+
 ## Install
 
 Add the stable `0.4.1` release:
@@ -109,6 +111,33 @@ if (document.get("name")) |name| {
 `field` and `at` assert that the requested element exists.
 `isString`, `isArray`, and other `isXxx` methods check the runtime JSON type; `string`, `array`, and other value accessors assert that the type matches.
 
+### Diagnosing invalid JSON
+
+`jsonz.diagnostic` reviews JSON: it reports the first format problem, with the
+line, the column, and the reason. It reads raw bytes, so it needs no parser,
+allocator, or schema:
+
+```zig
+try jsonz.diagnostic.print(input, .{ .source_name = "config.json" });
+```
+
+```console
+config.json:3:18: error: expected ',' or ']', found '"'
+1 | {
+2 |   "name": "jsonz",
+3 |   "tags": ["zig" "json"],
+  |                  ^
+4 |   "count": 3
+5 | }
+```
+
+`printWith` writes to a writer of yours, `toSlice` returns the report as a
+slice, `isValid` answers with a `bool`, and `diagnose` hands back the
+`Diagnostic` for callers that want the span or the problem tag. Nothing is
+allocated on the way to a writer, and only the first problem is reported.
+Syntax is checked, not a schema, and the module stands on its own: it is
+independent of `jsonz.typed` and `jsonz.dom`.
+
 ## API
 
 ### `jsonz.typed`
@@ -209,6 +238,28 @@ Write options:
 | Field    | Description                                     |
 | -------- | ----------------------------------------------- |
 | `pretty` | Format output with indentation and line breaks. |
+
+### `jsonz.diagnostic`
+
+| API                    | Description                                            |
+| ---------------------- | ------------------------------------------------------ |
+| `diagnostic.isValid`   | Return whether the input is valid JSON.                |
+| `diagnostic.print`     | Write the report to standard error; silent when valid. |
+| `diagnostic.printWith` | Write the report to a writer; silent when valid.       |
+| `diagnostic.toSlice`   | Return the report as a new slice, or `null` if valid.  |
+| `diagnostic.diagnose`  | Low level: return the problem and where it is.         |
+
+All five take one `Options`: the first two fields decide what counts as valid
+JSON, the rest shape the report.
+
+| Field                   | Description                                                |
+| ----------------------- | ---------------------------------------------------------- |
+| `allow_comments`        | Accept C-style comments. Defaults to `false`.              |
+| `allow_trailing_commas` | Accept a trailing comma in an object or array.             |
+| `color`                 | Emit ANSI styles. Never probes the terminal.               |
+| `source_name`           | Name shown in the header. Defaults to `<input>`.           |
+| `context_lines`         | Source lines shown above and below. Defaults to `3`.       |
+| `max_line_width`        | Cut longer source lines around the problem. `0` shows all. |
 
 ## Development
 

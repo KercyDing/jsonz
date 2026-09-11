@@ -39,15 +39,32 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(float_tests).step);
 
-    addTest(
-        b,
-        test_step,
-        "fuzzy/fuzzy.zig",
-        jsonz_mod,
-        target,
-        optimize,
-        strip,
-    );
+    const integration_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "jsonz", .module = jsonz_mod },
+        },
+    });
+    const integration_tests = b.addTest(.{ .root_module = integration_tests_mod });
+    test_step.dependOn(&b.addRunArtifact(integration_tests).step);
+
+    // The fuzz targets run until stopped, so they get a step of their own:
+    // `zig build fuzzy --fuzz`. The plain test suite stays finite.
+    const fuzzy_step = b.step("fuzzy", "Run fuzz tests");
+    const fuzzy_tests_mod = b.createModule(.{
+        .root_source_file = b.path("tests/fuzzy_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "jsonz", .module = jsonz_mod },
+        },
+    });
+    const fuzzy_tests = b.addTest(.{ .root_module = fuzzy_tests_mod });
+    fuzzy_step.dependOn(&b.addRunArtifact(fuzzy_tests).step);
 
     // Benchmarks
     addBench(b, target);
@@ -56,32 +73,6 @@ pub fn build(b: *std.Build) void {
     if (b.option(bool, "microbench", "Enable zBench microbenchmarks") orelse false) {
         addMicrobench(b, microbench_step, target);
     }
-}
-
-fn addTest(
-    b: *std.Build,
-    test_step: *std.Build.Step,
-    source: []const u8,
-    jsonz_mod: *std.Build.Module,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    strip: bool,
-) void {
-    const mod = b.createModule(.{
-        .root_source_file = b.path(source),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .imports = &.{
-            .{ .name = "jsonz", .module = jsonz_mod },
-        },
-    });
-
-    const tests = b.addTest(.{
-        .root_module = mod,
-    });
-
-    test_step.dependOn(&b.addRunArtifact(tests).step);
 }
 
 fn addBench(

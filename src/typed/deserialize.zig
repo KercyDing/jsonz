@@ -478,7 +478,6 @@ fn unescapeString(allocator: Allocator, raw: []const u8) Error![]u8 {
 fn appendByte(result: *std.ArrayList(u8), allocator: Allocator, byte: u8) Error!void {
     result.append(allocator, byte) catch return error.OutOfMemory;
 }
-
 const testing = std.testing;
 
 test "nested values" {
@@ -571,19 +570,6 @@ test "caller buffer" {
 test "caller buffer capacity" {
     var buffer: [1]u8 = undefined;
     try testing.expectError(error.OutOfMemory, parseInto([]const u8, &buffer, "\"jsonz\"", .{}));
-}
-
-test "parsed value" {
-    var parsed = try parse([]const []const u8, testing.allocator, "[\"one\",\"two\"]", .{});
-    defer parsed.deinit();
-
-    try testing.expectEqualStrings("one", parsed.value[0]);
-    try testing.expectEqualStrings("two", parsed.value[1]);
-
-    var writer: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer writer.deinit();
-    try parsed.toWriter(&writer.writer, .{});
-    try testing.expectEqualStrings("[\"one\",\"two\"]", writer.written());
 }
 
 test "parsed value fallback" {

@@ -255,96 +255,6 @@ fn looksPretty(input: []const u8) bool {
 inline fn isWhitespace(byte: u8) bool {
     return byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r';
 }
-
-test "value access" {
-    var document = try parseWith(
-        std.testing.allocator,
-        "{\"enabled\":true,\"count\":42,\"items\":[null,\"jsonz\",-7,1.5]}",
-        .{},
-    );
-    defer document.deinit();
-
-    try std.testing.expect(document.isObject());
-    try std.testing.expect(document.field("enabled").bool());
-    try std.testing.expectEqual(@as(u64, 42), document.field("count").uint());
-    try std.testing.expect(document.get("missing") == null);
-
-    const items = document.field("items").array();
-    try std.testing.expect(items.at(0).isNull());
-    try std.testing.expectEqualStrings("jsonz", items.at(1).string());
-    try std.testing.expectEqual(@as(i64, -7), items.at(2).int());
-    try std.testing.expectEqual(@as(f64, 1.5), items.at(3).float());
-    try std.testing.expect(items.get(4) == null);
-}
-
-test "container iteration" {
-    var document = try parseWith(std.testing.allocator, "{\"a\":1,\"b\":2}", .{});
-    defer document.deinit();
-
-    var iterator = document.object().iterator();
-    var count: usize = 0;
-    while (iterator.next()) |entry| {
-        try std.testing.expect(entry.value.isUint());
-        try std.testing.expect(entry.key.len == 1);
-        count += 1;
-    }
-    try std.testing.expectEqual(@as(usize, 2), count);
-
-    var elements = document.object().get("a").?.kind();
-    try std.testing.expectEqual(value.Kind.uint, elements);
-    elements = document.root().kind();
-    try std.testing.expectEqual(value.Kind.object, elements);
-}
-
-test "access past a container child" {
-    // A container occupies its whole subtree in the pool, so accessors and
-    // iterators must step over it instead of by a fixed slot count. Every
-    // container here is followed by a later sibling, which is what a fixed
-    // stride gets wrong.
-    var document = try parseWith(
-        std.testing.allocator,
-        "{\"a\":[1,2],\"b\":{\"c\":[3,4]},\"d\":5,\"e\":[],\"f\":[[6],[7,8]]}",
-        .{},
-    );
-    defer document.deinit();
-
-    try std.testing.expectEqual(@as(u64, 5), document.field("d").uint());
-    try std.testing.expectEqual(@as(u64, 3), document.field("b").field("c").array().at(0).uint());
-    try std.testing.expectEqual(@as(u64, 4), document.field("b").field("c").array().at(1).uint());
-    try std.testing.expectEqual(@as(usize, 0), document.field("e").array().len());
-    try std.testing.expectEqual(@as(u64, 7), document.field("f").array().at(1).array().at(0).uint());
-    try std.testing.expectEqual(@as(u64, 8), document.field("f").array().at(1).array().at(1).uint());
-    try std.testing.expect(document.get("missing") == null);
-
-    // "c" belongs to "b", so the top level has five fields.
-    const keys = [_][]const u8{ "a", "b", "d", "e", "f" };
-    var fields = document.object().iterator();
-    var field_index: usize = 0;
-    while (fields.next()) |entry| : (field_index += 1) {
-        try std.testing.expectEqualStrings(keys[field_index], entry.key);
-    }
-    try std.testing.expectEqual(keys.len, field_index);
-
-    var list = try parseWith(std.testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
-    defer list.deinit();
-
-    const array = list.array();
-    try std.testing.expectEqual(@as(usize, 5), array.len());
-    try std.testing.expectEqual(@as(u64, 1), array.at(0).array().at(0).uint());
-    try std.testing.expectEqual(@as(u64, 3), array.at(1).array().at(1).array().at(0).uint());
-    try std.testing.expectEqual(@as(u64, 4), array.at(2).uint());
-    try std.testing.expectEqual(@as(usize, 0), array.at(3).array().len());
-    try std.testing.expectEqual(@as(u64, 5), array.at(4).uint());
-    try std.testing.expect(array.get(5) == null);
-
-    var elements = array.iterator();
-    var element_index: usize = 0;
-    while (elements.next()) |element| : (element_index += 1) {
-        if (element_index == 2) try std.testing.expect(element.isUint());
-    }
-    try std.testing.expectEqual(@as(usize, 5), element_index);
-}
-
 test "caller storage" {
     const input = "{\"name\":\"jsonz\",\"values\":[1,2]}";
     const storage = try std.testing.allocator.alloc(u8, parseBufferSize(input.len, .{}));
@@ -359,35 +269,6 @@ test "caller storage" {
     try std.testing.expectError(
         error.OutOfMemory,
         parseInto(&insufficient, input, .{}),
-    );
-}
-
-test "document serialization" {
-    var document = try parseWith(std.testing.allocator, "{\"name\":\"jsonz\",\"values\":[1,2]}", .{});
-    defer document.deinit();
-
-    const output = try document.toSlice(std.testing.allocator, .{});
-    defer std.testing.allocator.free(output);
-    try std.testing.expectEqualStrings("{\"name\":\"jsonz\",\"values\":[1,2]}", output);
-
-    var writer: std.Io.Writer.Allocating = .init(std.testing.allocator);
-    defer writer.deinit();
-    try document.field("name").toWriter(&writer.writer, .{});
-    try std.testing.expectEqualStrings("\"jsonz\"", writer.written());
-}
-
-test "escaped strings round trip" {
-    var document = try parseWith(std.testing.allocator, "{\"text\":\"line\\n\\u4e16\\u754c\",\"face\":\"\\ud83d\\ude00\"}", .{});
-    defer document.deinit();
-
-    try std.testing.expectEqualStrings("line\n\u{4e16}\u{754c}", document.field("text").string());
-    try std.testing.expectEqualStrings("\u{1f600}", document.field("face").string());
-
-    const output = try document.toSlice(std.testing.allocator, .{});
-    defer std.testing.allocator.free(output);
-    try std.testing.expectEqualStrings(
-        "{\"text\":\"line\\n\u{4e16}\u{754c}\",\"face\":\"\u{1f600}\"}",
-        output,
     );
 }
 
@@ -410,22 +291,6 @@ test "escaped keys are matched by content" {
     defer document.deinit();
     try std.testing.expectEqual(@as(u64, 1), document.field("ab").uint());
     try std.testing.expectEqual(@as(u64, 2), document.field("a").uint());
-}
-
-test "deeply nested documents" {
-    const depth = 20_000;
-    const input = try std.testing.allocator.alloc(u8, depth * 2);
-    defer std.testing.allocator.free(input);
-    @memset(input[0..depth], '[');
-    @memset(input[depth..], ']');
-
-    var document = try parseWith(std.testing.allocator, input, .{});
-    defer document.deinit();
-
-    // Neither the reader nor the writer may recurse.
-    const output = try document.toSlice(std.testing.allocator, .{});
-    defer std.testing.allocator.free(output);
-    try std.testing.expectEqualStrings(input, output);
 }
 
 test "invalid input" {

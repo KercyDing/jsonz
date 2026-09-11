@@ -256,7 +256,7 @@ JSON, the rest shape the report.
 | ----------------------- | ---------------------------------------------------------- |
 | `allow_comments`        | Accept C-style comments. Defaults to `false`.              |
 | `allow_trailing_commas` | Accept a trailing comma in an object or array.             |
-| `color`                 | Emit ANSI styles. Never probes the terminal.               |
+| `enable_color`          | Emit ANSI styles. Never probes the terminal.               |
 | `source_name`           | Name shown in the header. Defaults to `<input>`.           |
 | `context_lines`         | Source lines shown above and below. Defaults to `3`.       |
 | `max_line_width`        | Cut longer source lines around the problem. `0` shows all. |

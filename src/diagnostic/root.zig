@@ -40,7 +40,7 @@ pub const Options = struct {
     allow_trailing_commas: bool = false,
 
     /// Emit ANSI styles; the library never probes the terminal.
-    color: bool = false,
+    enable_color: bool = false,
     /// Name shown in the header, e.g. `config.json:3:18: error: …`.
     source_name: []const u8 = "<input>",
     /// Source lines shown above and below the problem; 0 shows only that line.
@@ -57,7 +57,7 @@ pub const Options = struct {
 
     fn renderOptions(self: Options) render_mod.RenderOptions {
         return .{
-            .color = self.color,
+            .enable_color = self.enable_color,
             .source_name = self.source_name,
             .context_lines = self.context_lines,
             .max_line_width = self.max_line_width,

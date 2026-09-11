@@ -12,7 +12,7 @@ const Location = error_mod.Location;
 const Span = error_mod.Span;
 
 pub const RenderOptions = struct {
-    color: bool = false,
+    enable_color: bool = false,
     source_name: []const u8 = "<input>",
     context_lines: u8 = 3,
     max_line_width: usize = 200,
@@ -177,7 +177,7 @@ fn setStyle(
     options: RenderOptions,
     code: []const u8,
 ) std.Io.Writer.Error!void {
-    if (options.color) try writer.writeAll(code);
+    if (options.enable_color) try writer.writeAll(code);
 }
 
 fn writeHeader(
@@ -580,7 +580,7 @@ test "colours" {
     const diagnostic = check_mod.check("[1 2]", .{}).?;
     const output = try toSlice(testing.allocator, diagnostic, "[1 2]", .{
         .source_name = "i",
-        .color = true,
+        .enable_color = true,
     });
     defer testing.allocator.free(output);
     try testing.expectEqualStrings(

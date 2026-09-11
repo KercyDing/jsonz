@@ -110,15 +110,21 @@ const corpus = [_][]const u8{
     "/* a **/1",
     "/* c",
     "\xef\xbb\xbf{}",
-    deep_arrays,
-    deep_broken,
-    long_string,
     "{\"id\":7,\"name\":\"jsonz\",\"score\":1.5,\"active\":true,\"role\":\"admin\"," ++
         "\"address\":{\"city\":\"x\",\"zip\":null},\"tags\":[\"a\"],\"counts\":[1,-2]," ++
         "\"history\":[{\"login\":null},{\"update\":{\"field\":\"f\",\"value\":\"v\"}}]," ++
         "\"pair\":[0,1]}",
     "{\"id\":7,\"name\":\"jsonz\",\"score\":1.5,\"active\":true,\"role\":\"nope\"," ++
         "\"address\":{\"city\":\"x\"}}",
+    deep_arrays,
+    deep_broken,
+};
+
+const option_sets = [_]jsonz.dom.ParseOptions{
+    .{},
+    .{ .allow_trailing_commas = true },
+    .{ .allow_comments = true },
+    .{ .allow_comments = true, .allow_trailing_commas = true },
 };
 
 test "JSON parser fuzz" {
@@ -132,23 +138,24 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
     const length = smith.slice(&buffer);
     const input = buffer[0..length];
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    inline for (.{ FuzzTarget, Address, Role, Action, []const i32, []const u8 }) |T| {
-        if (typedAccepts(T, allocator, input)) try expectDomAccepts(input, .{});
+    inline for (types) |T| {
+        if (typedAccepts(T, input)) try expectDomAccepts(input, .{});
+        try expectTypedEntriesAgree(T, input);
     }
 
-    _ = jsonz.typed.parseBorrowed(bool, allocator, input, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(i32, allocator, input, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(u64, allocator, input, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(f32, allocator, input, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(f64, allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(bool, std.testing.allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(i32, std.testing.allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(u64, std.testing.allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(f32, std.testing.allocator, input, .{}) catch {};
+
+    try expectNumbersMatchStd(input);
 }
 
-fn typedAccepts(comptime T: type, allocator: std.mem.Allocator, input: []const u8) bool {
-    _ = jsonz.typed.parseBorrowed(T, allocator, input, .{ .ignore_unknown_fields = true }) catch return false;
+/// The typed types every target agrees on.
+const types = .{ FuzzTarget, Address, Role, Action, []const i32, []const u8, u64, i64, f64 };
+
+fn typedAccepts(comptime T: type, input: []const u8) bool {
+    _ = jsonz.typed.parseBorrowed(T, std.testing.allocator, input, .{ .ignore_unknown_fields = true }) catch return false;
     return true;
 }
 
@@ -163,6 +170,90 @@ fn expectDomAccepts(input: []const u8, options: jsonz.dom.ParseOptions) !void {
     document.deinit();
 }
 
+/// `parse`, `parseBorrowed` and `parseInto` see the same grammar, so they must
+/// accept the same inputs and serialize the same values.
+fn expectTypedEntriesAgree(comptime T: type, input: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const options: jsonz.typed.ParseOptions = .{ .ignore_unknown_fields = true };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+
+    var owned = jsonz.typed.parse(T, allocator, input, options);
+    const borrowed = jsonz.typed.parseBorrowed(T, scratch, input, options);
+
+    if (owned) |*parsed| {
+        defer parsed.deinit();
+        const borrowed_value = borrowed catch |failure| switch (failure) {
+            error.OutOfMemory => return,
+            else => {
+                std.debug.print("parse accepted but parseBorrowed rejected: {s} ({s})\n", .{ input, @errorName(failure) });
+                return error.TestUnexpectedResult;
+            },
+        };
+
+        const from_owned = try parsed.toSlice(allocator, .{});
+        defer allocator.free(from_owned);
+        const from_borrowed = try jsonz.typed.toSlice(allocator, borrowed_value, .{});
+        defer allocator.free(from_borrowed);
+        if (!std.mem.eql(u8, from_owned, from_borrowed)) {
+            std.debug.print("parse and parseBorrowed serialize differently: {s}\n", .{input});
+            return error.TestUnexpectedResult;
+        }
+
+        const buffer = scratch.alloc(u8, 64 * 1024) catch return;
+        _ = jsonz.typed.parseInto(T, buffer, input, options) catch |failure| switch (failure) {
+            error.OutOfMemory => {},
+            else => {
+                std.debug.print("parse accepted but parseInto rejected: {s} ({s})\n", .{ input, @errorName(failure) });
+                return error.TestUnexpectedResult;
+            },
+        };
+    } else |owned_failure| switch (owned_failure) {
+        error.OutOfMemory => return,
+        else => {
+            _ = borrowed catch return;
+            std.debug.print("parseBorrowed accepted but parse rejected: {s}\n", .{input});
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
+/// A bare JSON number must convert the way `std.fmt` does.
+fn expectNumbersMatchStd(input: []const u8) !void {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    if (trimmed.len == 0) return;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+
+    if (jsonz.typed.parseBorrowed(f64, scratch, input, .{})) |value| {
+        const expected = std.fmt.parseFloat(f64, trimmed) catch return;
+        if (@as(u64, @bitCast(value)) != @as(u64, @bitCast(expected))) {
+            std.debug.print("f64 mismatch on {s}: {d} != {d}\n", .{ input, value, expected });
+            return error.TestUnexpectedResult;
+        }
+    } else |_| {}
+
+    if (jsonz.typed.parseBorrowed(u64, scratch, input, .{})) |value| {
+        const expected = std.fmt.parseInt(u64, trimmed, 10) catch return;
+        if (value != expected) {
+            std.debug.print("u64 mismatch on {s}: {d} != {d}\n", .{ input, value, expected });
+            return error.TestUnexpectedResult;
+        }
+    } else |_| {}
+
+    if (jsonz.typed.parseBorrowed(i64, scratch, input, .{})) |value| {
+        const expected = std.fmt.parseInt(i64, trimmed, 10) catch return;
+        if (value != expected) {
+            std.debug.print("i64 mismatch on {s}: {d} != {d}\n", .{ input, value, expected });
+            return error.TestUnexpectedResult;
+        }
+    } else |_| {}
+}
+
 test "JSON diagnostic parity fuzz" {
     try std.testing.fuzz({}, fuzzParity, .{ .corpus = &corpus });
 }
@@ -174,35 +265,7 @@ fn fuzzParity(_: void, smith: *std.testing.Smith) !void {
     const length = smith.slice(&buffer);
     const input = buffer[0..length];
 
-    try expectAgreement(input, .{});
-    try expectAgreement(input, .{ .allow_trailing_commas = true });
-    try expectAgreement(input, .{ .allow_comments = true });
-    try expectAgreement(input, .{ .allow_comments = true, .allow_trailing_commas = true });
-}
-
-fn expectAgreement(input: []const u8, options: jsonz.dom.ParseOptions) !void {
-    const accepts = try domAccepts(input, options);
-    const valid = jsonz.diagnostic.isValid(input, .{
-        .allow_comments = options.allow_comments,
-        .allow_trailing_commas = options.allow_trailing_commas,
-    });
-    if (accepts != valid) {
-        std.debug.print("dom and diagnostic disagree on {s} (dom accepts: {}, isValid: {})\n", .{
-            input,
-            accepts,
-            valid,
-        });
-        return error.TestUnexpectedResult;
-    }
-}
-
-fn domAccepts(input: []const u8, options: jsonz.dom.ParseOptions) error{OutOfMemory}!bool {
-    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
-        error.InvalidJson => return false,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    document.deinit();
-    return true;
+    for (option_sets) |options| try expectAllInvariants(input, options);
 }
 
 test "JSON mutation fuzz" {
@@ -226,8 +289,128 @@ fn fuzzMutation(_: void, smith: *std.testing.Smith) !void {
         @memcpy(input.items[offset..][0..length], patch[0..length]);
     }
 
-    try expectAgreement(input.items, .{});
-    try expectAgreement(input.items, .{ .allow_comments = true, .allow_trailing_commas = true });
+    for (option_sets) |options| try expectAllInvariants(input.items, options);
+}
+
+/// Everything the fuzzer checks about one input under one option set:
+/// the dom/diagnostic verdict, an external reference, the diagnostic report,
+/// and a dom round trip.
+fn expectAllInvariants(input: []const u8, options: jsonz.dom.ParseOptions) !void {
+    const allocator = std.testing.allocator;
+    const check: jsonz.diagnostic.Options = .{
+        .allow_comments = options.allow_comments,
+        .allow_trailing_commas = options.allow_trailing_commas,
+    };
+
+    const accepts = try domAccepts(input, options);
+    const valid = jsonz.diagnostic.isValid(input, check);
+    if (accepts != valid) {
+        std.debug.print("dom and diagnostic disagree on {s} (dom accepts: {}, isValid: {})\n", .{
+            input,
+            accepts,
+            valid,
+        });
+        return error.TestUnexpectedResult;
+    }
+
+    // `std.json` has no comments or trailing commas, so it only speaks for the
+    // strict option set. It also rejects every number jsonz rejects, so the
+    // safe direction is: what jsonz accepts, the reference has to accept too.
+    if (isStrict(options)) {
+        if (valid) {
+            const reference_accepts = std.json.validate(std.heap.page_allocator, input) catch true;
+            if (!reference_accepts) {
+                std.debug.print("jsonz accepted what std.json rejects: {s}\n", .{input});
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    try expectDiagnosticReport(allocator, input, check, valid);
+    if (accepts) try expectDomRoundTrip(allocator, input, options);
+}
+
+fn isStrict(options: jsonz.dom.ParseOptions) bool {
+    return !options.allow_comments and !options.allow_trailing_commas;
+}
+
+fn domAccepts(input: []const u8, options: jsonz.dom.ParseOptions) error{OutOfMemory}!bool {
+    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
+        error.InvalidJson => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    document.deinit();
+    return true;
+}
+
+/// The two rendering entry points must agree, the report must name a span
+/// inside the input, and `isValid` must match `diagnose`.
+fn expectDiagnosticReport(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    check: jsonz.diagnostic.Options,
+    valid: bool,
+) !void {
+    const diagnostic = jsonz.diagnostic.diagnose(input, check);
+    if (valid) {
+        if (diagnostic != null) {
+            std.debug.print("isValid accepted but diagnose reported a problem: {s}\n", .{input});
+            return error.TestUnexpectedResult;
+        }
+        return;
+    }
+
+    const problem = diagnostic orelse {
+        std.debug.print("isValid rejected but diagnose found nothing: {s}\n", .{input});
+        return error.TestUnexpectedResult;
+    };
+    if (problem.span.offset > input.len or problem.span.offset + problem.span.len > input.len) {
+        std.debug.print("diagnostic span {d}+{d} outside input of {d} bytes: {s}\n", .{
+            problem.span.offset,
+            problem.span.len,
+            input.len,
+            input,
+        });
+        return error.TestUnexpectedResult;
+    }
+
+    const options: jsonz.diagnostic.ReportOptions = .{ .check = check };
+    const slice = (try jsonz.diagnostic.toSlice(allocator, input, options)) orelse {
+        std.debug.print("toSlice returned null for invalid input: {s}\n", .{input});
+        return error.TestUnexpectedResult;
+    };
+    defer allocator.free(slice);
+    if (slice.len == 0) {
+        std.debug.print("toSlice returned an empty report: {s}\n", .{input});
+        return error.TestUnexpectedResult;
+    }
+
+    var streamed: std.Io.Writer.Allocating = .init(allocator);
+    defer streamed.deinit();
+    try jsonz.diagnostic.printWith(input, options, .{ .writer = &streamed.writer, .mode = .no_color });
+    if (!std.mem.eql(u8, slice, streamed.written())) {
+        std.debug.print("toSlice and printWith disagree on {s}\n", .{input});
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// Serializing a parsed document must reach a fixed point, so parsing and
+/// writing it again cannot drift.
+fn expectDomRoundTrip(allocator: std.mem.Allocator, input: []const u8, options: jsonz.dom.ParseOptions) !void {
+    var document = try jsonz.dom.parseWith(allocator, input, options);
+    defer document.deinit();
+    const first = try document.toSlice(allocator, .{});
+    defer allocator.free(first);
+
+    var again = try jsonz.dom.parseWith(allocator, first, options);
+    defer again.deinit();
+    const second = try again.toSlice(allocator, .{});
+    defer allocator.free(second);
+
+    if (!std.mem.eql(u8, first, second)) {
+        std.debug.print("dom round trip drifted on {s}: {s} -> {s}\n", .{ input, first, second });
+        return error.TestUnexpectedResult;
+    }
 }
 
 fn writeValue(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) anyerror!void {

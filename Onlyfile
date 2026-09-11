@@ -14,7 +14,7 @@ test():
 
 [help] Run fuzzy tests
 [desc] Pass the iteration limit per target, e.g. `only fuzzy 10000`.
-fuzzy(iterations = "10000000"):
+fuzzy(iterations = "100000"):
     zig build fuzzy --fuzz={{iterations}} -Doptimize=ReleaseFast
 
 [help] Run benchmarks

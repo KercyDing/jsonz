@@ -1,6 +1,17 @@
 const std = @import("std");
 const float = @import("float");
 
+/// The number of continuation bytes each first byte expects, or `0xFF` when it
+/// cannot start a sequence.
+const utf8_continuations: [256]u8 = blk: {
+    var table: [256]u8 = @splat(0xFF);
+    for (0x00..0x80) |i| table[i] = 0;
+    for (0xC2..0xE0) |i| table[i] = 1;
+    for (0xE0..0xF0) |i| table[i] = 2;
+    for (0xF0..0xF5) |i| table[i] = 3;
+    break :blk table;
+};
+
 /// The next JSON syntax item returned by `Cursor.next` or `Cursor.peek`.
 ///
 /// The `string` and `number` payloads borrow the cursor input. A string payload
@@ -25,6 +36,7 @@ pub const Error = error{
     InvalidNumber,
     InvalidEscape,
     InvalidControlCharacter,
+    InvalidUtf8,
     MaxDepthExceeded,
 };
 
@@ -158,6 +170,9 @@ pub const Cursor = struct {
     pub inline fn readFloat(self: *Cursor, comptime T: type) Error!T {
         self.skipWhitespace();
         const parsed = try float.parseNumber(T, self.input, self.pos);
+        // JSON has no infinities, and the DOM rejects any number that does not
+        // fit the target type, so an overflowing token is not valid here either.
+        if (!std.math.isFinite(parsed.value)) return error.InvalidNumber;
         self.pos = parsed.end;
         return parsed.value;
     }
@@ -274,7 +289,8 @@ pub const Cursor = struct {
             const special =
                 (bytes == @as(@Vector(4, u8), @splat('"'))) |
                 (bytes == @as(@Vector(4, u8), @splat('\\'))) |
-                (bytes < @as(@Vector(4, u8), @splat(0x20)));
+                (bytes < @as(@Vector(4, u8), @splat(0x20))) |
+                (bytes >= @as(@Vector(4, u8), @splat(0x80)));
             if (@reduce(.Or, special)) break;
             pos += 4;
         }
@@ -303,10 +319,73 @@ pub const Cursor = struct {
                     }
                 },
                 0x00...0x1f => return error.InvalidControlCharacter,
-                else => pos += 1,
+                else => pos = if (input[pos] < 0x80) pos + 1 else try skipUtf8(input, pos),
             }
         }
         return error.UnexpectedEof;
+    }
+
+    /// Advances over a run of UTF-8 sequences and returns the offset of the
+    /// first ASCII byte.
+    ///
+    /// JSON text is UTF-8, so a lone continuation byte, an overlong form, a
+    /// surrogate, or a code point past U+10FFFF is not a valid string. One
+    /// little-endian 32-bit load validates a whole sequence, so runs move
+    /// several bytes per iteration.
+    fn skipUtf8(input: []const u8, start: usize) Error!usize {
+        var pos = start;
+        while (pos + 4 <= input.len) {
+            const u = std.mem.readInt(u32, input[pos..][0..4], .little);
+            // 3-byte sequence [1110xxxx 10xxxxxx 10xxxxxx].
+            if (u & 0x00C0C0F0 == 0x008080E0) {
+                const required = u & 0x0000200F;
+                if (required == 0 or required == 0x0000200D) return error.InvalidUtf8;
+                pos += 3;
+                continue;
+            }
+            // 2-byte sequence [110xxxxx 10xxxxxx], rejecting overlong C0/C1.
+            if (u & 0x0000C0E0 == 0x000080C0) {
+                if (u & 0x0000001E == 0) return error.InvalidUtf8;
+                pos += 2;
+                continue;
+            }
+            // 4-byte sequence, restricted to U+10000..U+10FFFF.
+            if (u & 0xC0C0C0F8 == 0x808080F0) {
+                const required = u & 0x00003007;
+                if (required == 0 or (required & 0x04 != 0 and required & 0x00003003 != 0)) return error.InvalidUtf8;
+                pos += 4;
+                continue;
+            }
+            if (u & 0x80 == 0) return pos;
+            return error.InvalidUtf8;
+        }
+        // Fewer than four bytes remain: validate one sequence at a time.
+        while (pos < input.len) {
+            if (input[pos] < 0x80) return pos;
+            pos += try utf8SequenceLen(input, pos);
+        }
+        return pos;
+    }
+
+    /// Validates one UTF-8 sequence at `pos` and returns its byte length.
+    inline fn utf8SequenceLen(input: []const u8, pos: usize) Error!usize {
+        const b0 = input[pos];
+        const extra = utf8_continuations[b0];
+        if (extra == 0xFF or pos + extra >= input.len) return error.InvalidUtf8;
+        if (input[pos + 1] & 0xC0 != 0x80) return error.InvalidUtf8;
+        if (extra == 1) return 2;
+        if (input[pos + 2] & 0xC0 != 0x80) return error.InvalidUtf8;
+        if (extra == 2) {
+            const b1 = input[pos + 1];
+            if (b0 == 0xE0 and b1 < 0xA0) return error.InvalidUtf8;
+            if (b0 == 0xED and b1 >= 0xA0) return error.InvalidUtf8;
+            return 3;
+        }
+        if (input[pos + 3] & 0xC0 != 0x80) return error.InvalidUtf8;
+        const b1 = input[pos + 1];
+        if (b0 == 0xF0 and b1 < 0x90) return error.InvalidUtf8;
+        if (b0 == 0xF4 and b1 >= 0x90) return error.InvalidUtf8;
+        return 4;
     }
 
     fn scanNumber(self: *Cursor) Error![]const u8 {

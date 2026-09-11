@@ -543,6 +543,37 @@ test "unicode noncharacters" {
     try testing.expectEqual(@as(usize, 3), value.len);
 }
 
+test "invalid utf8" {
+    const cases = [_][]const u8{
+        "\"\xff\"",
+        "\"\x80\"",
+        "\"\xc2\"",
+        "\"\xc0\x80\"",
+        "\"\xe0\x80\x80\"",
+        "\"\xed\xa0\x80\"",
+        "\"\xf4\x90\x80\x80\"",
+        "\"\xf5\x80\x80\x80\"",
+    };
+    for (cases) |case| {
+        try testing.expectError(error.InvalidUtf8, parseAllocating([]const u8, testing.allocator, case, .{}));
+    }
+
+    const valid = try parseAllocating([]const u8, testing.allocator, "\"\xc3\xa9\xe4\xb8\xad\xf0\x9f\x98\x80\"", .{});
+    defer testing.allocator.free(valid);
+    try testing.expectEqualStrings("\u{e9}\u{4e2d}\u{1f600}", valid);
+}
+
+test "float overflow" {
+    // JSON has no infinities, so a token that overflows the target type is
+    // rejected, matching the DOM and the diagnostic checker.
+    try testing.expectError(error.InvalidNumber, parseAllocating(f32, testing.allocator, "1e39", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(f64, testing.allocator, "1e309", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(f64, testing.allocator, "-1e309", .{}));
+    try testing.expectError(error.InvalidNumber, parseAllocating(f64, testing.allocator, "8580858085858085808.5E308", .{}));
+    // Underflow stays finite and parses to zero.
+    try testing.expectEqual(@as(f64, 0), try parseAllocating(f64, testing.allocator, "1e-400", .{}));
+}
+
 test "integer bounds" {
     try testing.expectEqual(std.math.maxInt(u64), try parseAllocating(u64, testing.allocator, "18446744073709551615", .{}));
     try testing.expectEqual(std.math.minInt(i64), try parseAllocating(i64, testing.allocator, "-9223372036854775808", .{}));

@@ -119,7 +119,7 @@ fn addBench(
     });
 
     const bench_mod = b.createModule(.{
-        .root_source_file = b.path("bench/main.zig"),
+        .root_source_file = b.path("benchmarks/main.zig"),
         .target = target,
         .optimize = .ReleaseFast,
         // The benchmark uses `std.heap.c_allocator` for its own allocations.

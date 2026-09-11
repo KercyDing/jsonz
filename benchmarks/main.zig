@@ -161,7 +161,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     std.debug.print("jsonz benchmark ({s})\n", .{@tagName(@import("builtin").mode)});
-    std.debug.print("data: bench/json, input read and cleanup excluded\n", .{});
+    std.debug.print("data: benchmarks/json, input read and cleanup excluded\n", .{});
 
     var jsonz_decode_geomean = GeometricMean{};
     var jsonz_encode_geomean = GeometricMean{};
@@ -173,7 +173,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         if (selected_file) |file| if (!std.mem.eql(u8, file, name)) continue;
 
         var path_buffer: [64]u8 = undefined;
-        const path = try std.fmt.bufPrint(&path_buffer, "bench/json/{s}", .{name});
+        const path = try std.fmt.bufPrint(&path_buffer, "benchmarks/json/{s}", .{name});
         const input = try std.Io.Dir.cwd().readFileAlloc(
             std.Options.debug_io,
             path,

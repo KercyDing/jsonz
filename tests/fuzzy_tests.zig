@@ -26,53 +26,208 @@ const FuzzTarget = struct {
     pair: [2]f64 = .{ 0, 0 },
 };
 
+/// Seeds the fuzzer with documents that already sit near a branch: valid
+/// values, values only the permissive options accept, and broken ones.
+const deep_arrays = "[" ** 300 ++ "]" ** 300;
+const deep_broken = "[" ** 300 ++ "x";
+const long_string = "\"" ++ "a" ** 100 ++ "\\n" ++ "b" ** 100 ++ "\"";
+const escape_run = "\"" ++ "\\n\\u0041\\t\\\\" ++ "a" ** 40 ++ "\\\"" ++ "b" ** 40 ++ "\"";
+
+const corpus = [_][]const u8{
+    "{}",
+    "[]",
+    "null",
+    "true",
+    "-0.0",
+    "1e309",
+    "-1e309",
+    "01",
+    "-01",
+    "1.",
+    ".5",
+    "1e",
+    "1e+",
+    "+1",
+    "0xFF",
+    "NaN",
+    "tru",
+    "\"\"",
+    "\"\\u0041\"",
+    "\"\\uD83D\\uDE00\"",
+    "\"\\uD800\"",
+    "\"\\uD800\\u0041\"",
+    "\"\\uDC00\"",
+    "\"\\uZZZZ\"",
+    "\"\\u12\"",
+    "\"a\nb\"",
+    "\"a\\q\"",
+    "\"/\"",
+    "\"\xc3\xa9\"",
+    "\"\xff\"",
+    "\"\xc0\x80\"",
+    "\"\xed\xa0\x80\"",
+    "\"\xe4\xb8\xad\"",
+    "\"\xf0\x9f\x98\x80\"",
+    "\"\xe4\xb8\xad\xe6\x96\x87\xf0\x9f\x98\x80\"",
+    "\"\xc2\x80\"",
+    "\"\xdf\xbf\"",
+    "\"\xe0\xa0\x80\"",
+    "\"\xef\xbf\xbf\"",
+    "\"\xf0\x90\x80\x80\"",
+    "\"\xf4\x8f\xbf\xbf\"",
+    "\"\xc3\xa9",
+    "\"\xe4\xb8\xad",
+    "\"\xf0\x9f\x98\x80",
+    "\"a\\n\xe4\xb8\xadb\"",
+    "\"\\u00e9\\u4e2d\\u00e9\"",
+    "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"",
+    "\"\\u0000\\u007f\\u0080\\u07ff\\u0800\\uffff\"",
+    "\"\\uD83D\\uDE00\\uD83D\\uDE39\"",
+    "18446744073709551615",
+    "-9223372036854775808",
+    "1e-400",
+    "{\"a\":[[[]]],\"b\":{\"c\":{}}}",
+    long_string,
+    escape_run,
+    " \t\r\n{\n  \"a\" : [ true , false , null ]\n}\n",
+    "[1,2,3]",
+    "[1 2]",
+    "[1,]",
+    "[1,,2]",
+    "[}",
+    "{\"a\":1}",
+    "{\"a\":01}",
+    "{\"a\":1,}",
+    "{\"a\" 1}",
+    "{\"a\":1 \"b\":2}",
+    "{1:2}",
+    "{} []",
+    "1 x",
+    "// c\n1",
+    "// c\r\n1",
+    "/* c */ 1",
+    "/* a * b */1",
+    "/* a **/1",
+    "/* c",
+    "\xef\xbb\xbf{}",
+    deep_arrays,
+    deep_broken,
+    long_string,
+    "{\"id\":7,\"name\":\"jsonz\",\"score\":1.5,\"active\":true,\"role\":\"admin\"," ++
+        "\"address\":{\"city\":\"x\",\"zip\":null},\"tags\":[\"a\"],\"counts\":[1,-2]," ++
+        "\"history\":[{\"login\":null},{\"update\":{\"field\":\"f\",\"value\":\"v\"}}]," ++
+        "\"pair\":[0,1]}",
+    "{\"id\":7,\"name\":\"jsonz\",\"score\":1.5,\"active\":true,\"role\":\"nope\"," ++
+        "\"address\":{\"city\":\"x\"}}",
+};
+
 test "JSON parser fuzz" {
-    try std.testing.fuzz({}, fuzzOne, .{});
+    try std.testing.fuzz({}, fuzzOne, .{ .corpus = &corpus });
 }
 
+/// Feeds raw fuzz bytes to the typed parser and holds it to the DOM's verdict:
+/// whatever the typed parser accepts has to be valid JSON.
 fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
-    var input: std.ArrayList(u8) = .empty;
-    defer input.deinit(std.testing.allocator);
-    if (smith.value(bool)) {
-        try writeTarget(smith, &input);
-    } else {
-        try writeValue(smith, &input, 0);
-    }
+    var buffer: [4096]u8 = undefined;
+    const length = smith.slice(&buffer);
+    const input = buffer[0..length];
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    _ = jsonz.typed.parseBorrowed(FuzzTarget, allocator, input.items, .{ .ignore_unknown_fields = true }) catch {};
-    _ = jsonz.typed.parseBorrowed(bool, allocator, input.items, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(i32, allocator, input.items, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed([]const i32, allocator, input.items, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(Address, allocator, input.items, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(Role, allocator, input.items, .{}) catch {};
-    _ = jsonz.typed.parseBorrowed(Action, allocator, input.items, .{}) catch {};
+    inline for (.{ FuzzTarget, Address, Role, Action, []const i32, []const u8 }) |T| {
+        if (typedAccepts(T, allocator, input)) try expectDomAccepts(input, .{});
+    }
+
+    _ = jsonz.typed.parseBorrowed(bool, allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(i32, allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(u64, allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(f32, allocator, input, .{}) catch {};
+    _ = jsonz.typed.parseBorrowed(f64, allocator, input, .{}) catch {};
 }
 
-fn writeTarget(smith: *std.testing.Smith, out: *std.ArrayList(u8)) anyerror!void {
-    try out.appendSlice(std.testing.allocator, "{\"id\":123,\"name\":");
-    try writeString(smith, out);
-    try out.appendSlice(std.testing.allocator, ",\"score\":1.25,\"active\":true,\"role\":\"");
-    const roles = [_][]const u8{ "admin", "user", "guest" };
-    try out.appendSlice(std.testing.allocator, roles[smith.valueRangeAtMost(u8, 0, roles.len - 1)]);
-    try out.appendSlice(std.testing.allocator, "\",\"address\":{\"city\":");
-    try writeString(smith, out);
-    try out.appendSlice(std.testing.allocator, "},\"tags\":[");
-    const tags = smith.valueRangeAtMost(u8, 0, 3);
-    for (0..tags) |index| {
-        if (index != 0) try out.append(std.testing.allocator, ',');
-        try writeString(smith, out);
+fn typedAccepts(comptime T: type, allocator: std.mem.Allocator, input: []const u8) bool {
+    _ = jsonz.typed.parseBorrowed(T, allocator, input, .{ .ignore_unknown_fields = true }) catch return false;
+    return true;
+}
+
+fn expectDomAccepts(input: []const u8, options: jsonz.dom.ParseOptions) !void {
+    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
+        error.InvalidJson => {
+            std.debug.print("typed parser accepted invalid JSON: {s}\n", .{input});
+            return error.TestUnexpectedResult;
+        },
+        error.OutOfMemory => return failure,
+    };
+    document.deinit();
+}
+
+test "JSON diagnostic parity fuzz" {
+    try std.testing.fuzz({}, fuzzParity, .{ .corpus = &corpus });
+}
+
+/// Requires `jsonz.diagnostic` and `jsonz.dom` to agree on the raw fuzz bytes,
+/// under every combination of the permissive options.
+fn fuzzParity(_: void, smith: *std.testing.Smith) !void {
+    var buffer: [4096]u8 = undefined;
+    const length = smith.slice(&buffer);
+    const input = buffer[0..length];
+
+    try expectAgreement(input, .{});
+    try expectAgreement(input, .{ .allow_trailing_commas = true });
+    try expectAgreement(input, .{ .allow_comments = true });
+    try expectAgreement(input, .{ .allow_comments = true, .allow_trailing_commas = true });
+}
+
+fn expectAgreement(input: []const u8, options: jsonz.dom.ParseOptions) !void {
+    const accepts = try domAccepts(input, options);
+    const valid = jsonz.diagnostic.isValid(input, .{
+        .allow_comments = options.allow_comments,
+        .allow_trailing_commas = options.allow_trailing_commas,
+    });
+    if (accepts != valid) {
+        std.debug.print("dom and diagnostic disagree on {s} (dom accepts: {}, isValid: {})\n", .{
+            input,
+            accepts,
+            valid,
+        });
+        return error.TestUnexpectedResult;
     }
-    try out.appendSlice(std.testing.allocator, "],\"counts\":[1,-2,3],\"history\":[");
-    if (smith.value(bool)) {
-        try out.appendSlice(std.testing.allocator, "{\"login\":null}");
-    } else {
-        try out.appendSlice(std.testing.allocator, "{\"update\":{\"field\":\"x\",\"value\":\"y\"}}");
+}
+
+fn domAccepts(input: []const u8, options: jsonz.dom.ParseOptions) error{OutOfMemory}!bool {
+    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
+        error.InvalidJson => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    document.deinit();
+    return true;
+}
+
+test "JSON mutation fuzz" {
+    try std.testing.fuzz({}, fuzzMutation, .{ .corpus = &corpus });
+}
+
+/// Builds a valid document from the generator, then overwrites part of it with
+/// raw fuzz bytes. The generator keeps the input structured, the overwrite lets
+/// the fuzzer steer the damage.
+fn fuzzMutation(_: void, smith: *std.testing.Smith) !void {
+    var patch: [128]u8 = undefined;
+    const patch_len = smith.slice(&patch);
+
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(std.testing.allocator);
+    try writeValue(smith, &input, 0);
+
+    if (patch_len != 0 and input.items.len != 0) {
+        const offset = smith.index(input.items.len);
+        const length = @min(patch_len, input.items.len - offset);
+        @memcpy(input.items[offset..][0..length], patch[0..length]);
     }
-    try out.appendSlice(std.testing.allocator, "],\"pair\":[1.0,-2.5]}");
+
+    try expectAgreement(input.items, .{});
+    try expectAgreement(input.items, .{ .allow_comments = true, .allow_trailing_commas = true });
 }
 
 fn writeValue(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) anyerror!void {
@@ -155,64 +310,4 @@ fn writeObject(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) an
         try writeValue(smith, out, depth + 1);
     }
     try out.append(std.testing.allocator, '}');
-}
-
-test "JSON diagnostic parity fuzz" {
-    try std.testing.fuzz({}, fuzzParity, .{});
-}
-
-/// Generates a value, damages it, and requires `jsonz.diagnostic` to agree with
-/// `jsonz.dom` about whether the result is valid JSON.
-fn fuzzParity(_: void, smith: *std.testing.Smith) !void {
-    var input: std.ArrayList(u8) = .empty;
-    defer input.deinit(std.testing.allocator);
-    try writeValue(smith, &input, 0);
-    mutate(smith, &input);
-
-    const accepts = blk: {
-        var document = jsonz.dom.parseWith(std.testing.allocator, input.items, .{}) catch |failure| switch (failure) {
-            error.InvalidJson => break :blk false,
-            error.OutOfMemory => return failure,
-        };
-        document.deinit();
-        break :blk true;
-    };
-
-    const valid = jsonz.diagnostic.isValid(input.items, .{});
-    if (accepts != valid) {
-        std.debug.print("dom and diagnostic disagree on {s} (dom accepts: {}, isValid: {})\n", .{
-            input.items,
-            accepts,
-            valid,
-        });
-        return error.TestUnexpectedResult;
-    }
-}
-
-fn mutate(smith: *std.testing.Smith, input: *std.ArrayList(u8)) void {
-    const rounds = smith.valueRangeAtMost(u8, 0, 3);
-    for (0..rounds) |_| {
-        if (input.items.len == 0) return;
-        switch (smith.valueRangeAtMost(u8, 0, 2)) {
-            0 => {
-                const replacements = [_]u8{
-                    ',', ':', '{', '}', '[', ']', '"',  '\\', '0',  '9',
-                    'e', '-', '+', '.', 'x', ' ', '\n', '\t', 0x01, 0xff,
-                };
-                const index = smith.valueRangeAtMost(u32, 0, @intCast(input.items.len - 1));
-                input.items[index] = replacements[smith.valueRangeAtMost(u8, 0, replacements.len - 1)];
-            },
-            1 => {
-                input.shrinkRetainingCapacity(smith.valueRangeAtMost(u32, 0, @intCast(input.items.len)));
-            },
-            else => {
-                const insertions = [_]u8{
-                    ',', '"', '\\', '{', '}', '[', ']', 'x', '1', ' ', 0x7f, 0xc3,
-                };
-                const index = smith.valueRangeAtMost(u32, 0, @intCast(input.items.len));
-                const byte = insertions[smith.valueRangeAtMost(u8, 0, insertions.len - 1)];
-                input.insert(std.testing.allocator, index, byte) catch return;
-            },
-        }
-    }
 }

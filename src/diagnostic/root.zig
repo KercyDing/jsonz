@@ -45,12 +45,14 @@ pub const Options = struct {
 };
 
 /// Options for `print`, `printWith` and `toSlice`: how the report looks.
+///
+/// There is no colour flag: `print` asks standard error, and `printWith` writes
+/// to the `std.Io.Terminal` the caller hands it, so the destination's own mode
+/// decides. `toSlice` returns plain text.
 pub const ReportOptions = struct {
     /// What counts as valid JSON for this document, so that a document read
     /// with extensions enabled is not reported as broken.
     check: Options = .{},
-    /// Emit ANSI styles; the library never probes the terminal.
-    enable_color: bool = false,
     /// Name shown in the header, e.g. `config.json:3:18: error: …`.
     source_name: []const u8 = "<input>",
     /// Source lines shown above and below the problem; 0 shows only that line.
@@ -60,7 +62,6 @@ pub const ReportOptions = struct {
 
     fn renderOptions(self: ReportOptions) render_mod.RenderOptions {
         return .{
-            .enable_color = self.enable_color,
             .source_name = self.source_name,
             .context_lines = self.context_lines,
             .max_line_width = self.max_line_width,
@@ -80,27 +81,33 @@ pub fn isValid(input: []const u8, options: Options) bool {
 }
 
 /// Writes the first format problem in `input` to standard error, and nothing
-/// when the input is valid. It locks standard error for the caller.
+/// when the input is valid. It locks standard error for the caller, and colours
+/// the report whenever that stream is a terminal that takes escape codes,
+/// honouring `NO_COLOR` and `CLICOLOR_FORCE`.
 pub fn print(input: []const u8, options: ReportOptions) std.Io.Writer.Error!void {
     var buffer: [1024]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer);
     defer std.debug.unlockStderr();
-    try printWith(input, options, &stderr.file_writer.interface);
+    try printWith(input, options, stderr.terminal());
 }
 
-/// Writes the report to `writer`, and nothing when the input is valid JSON. The
-/// report is streamed, so nothing is allocated and its size is unbounded.
+/// Writes the report to `terminal`, and nothing when the input is valid JSON.
+/// The report is streamed, so nothing is allocated and its size is unbounded.
+///
+/// Build the terminal from the destination, e.g.
+/// `file.writer(io, &buffer).terminal()` or `.{ .writer = w, .mode = .no_color }`.
 pub fn printWith(
     input: []const u8,
     options: ReportOptions,
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
 ) std.Io.Writer.Error!void {
     const diagnostic = diagnose(input, options.check) orelse return;
-    return render_mod.render(diagnostic, input, writer, options.renderOptions());
+    return render_mod.render(diagnostic, input, terminal, options.renderOptions());
 }
 
 /// Renders the report into a slice owned by `allocator`, or returns null when
-/// the input is valid JSON.
+/// the input is valid JSON. The text is plain: escapes are left to whoever
+/// prints it.
 pub fn toSlice(allocator: std.mem.Allocator, input: []const u8, options: ReportOptions) !?[]const u8 {
     const diagnostic = diagnose(input, options.check) orelse return null;
     return try render_mod.toSlice(allocator, diagnostic, input, options.renderOptions());
@@ -128,7 +135,7 @@ test "streaming and slicing agree" {
 
     var streamed: std.Io.Writer.Allocating = .init(allocator);
     defer streamed.deinit();
-    try printWith(input, options, &streamed.writer);
+    try printWith(input, options, .{ .writer = &streamed.writer, .mode = .no_color });
 
     try testing.expect(slice.len > 20_000);
     try testing.expectEqualStrings(slice, streamed.written());
@@ -155,7 +162,7 @@ test "diagnose and output" {
 
     var written: std.Io.Writer.Allocating = .init(testing.allocator);
     defer written.deinit();
-    try printWith(input, .{ .source_name = "input.json" }, &written.writer);
+    try printWith(input, .{ .source_name = "input.json" }, .{ .writer = &written.writer, .mode = .no_color });
     try testing.expectEqualStrings(expected, written.written());
 
     const slice = (try toSlice(testing.allocator, input, .{ .source_name = "input.json" })).?;
@@ -165,7 +172,7 @@ test "diagnose and output" {
     var silent: std.Io.Writer.Allocating = .init(testing.allocator);
     defer silent.deinit();
     try print("[1,2]", .{});
-    try printWith("[1,2]", .{}, &silent.writer);
+    try printWith("[1,2]", .{}, .{ .writer = &silent.writer, .mode = .no_color });
     try testing.expectEqualStrings("", silent.written());
     try testing.expect(try toSlice(testing.allocator, "[1,2]", .{}) == null);
 

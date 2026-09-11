@@ -12,28 +12,25 @@ const Location = error_mod.Location;
 const Span = error_mod.Span;
 
 pub const RenderOptions = struct {
-    enable_color: bool = false,
     source_name: []const u8 = "<input>",
     context_lines: u8 = 3,
     max_line_width: usize = 200,
 };
 
-/// ANSI styles, matching the Zig compiler's own palette.
-const style = struct {
-    const reset = "\x1b[0m";
-    const bold = "\x1b[1m";
-    const dim = "\x1b[2m";
-    const red = "\x1b[31m";
-    const green = "\x1b[32m";
-    const cyan = "\x1b[36m";
-};
+/// Applies one style, using the Zig compiler's palette, when `terminal`'s mode
+/// supports it. A failed colour write is not fatal: the text written right after
+/// reports the real error.
+fn applyColor(terminal: std.Io.Terminal, color: std.Io.Terminal.Color) void {
+    terminal.setColor(color) catch {};
+}
 
 pub fn render(
     diagnostic: Diagnostic,
     input: []const u8,
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
     options: RenderOptions,
 ) std.Io.Writer.Error!void {
+    const writer = terminal.writer;
     const location = error_mod.locate(input, diagnostic.span.offset);
     const window = Window.init(input, location, options.context_lines);
 
@@ -65,13 +62,13 @@ pub fn render(
         }
     }
 
-    try writeHeader(writer, options, location, "error", style.red, .{ .problem = diagnostic }, input);
-    try writeSnippet(writer, input, options, window, annotations[0..count]);
+    try writeHeader(terminal, options, location, "error", .red, .{ .problem = diagnostic }, input);
+    try writeSnippet(terminal, input, options, window, annotations[0..count]);
 
-    if (bare) |message| try writeBareNote(writer, options, message);
+    if (bare) |message| try writeBareNote(terminal, message);
     if (distant) |note| {
         try writer.writeByte('\n');
-        try renderNoteBlock(note.span, note.message, input, writer, options);
+        try renderNoteBlock(note.span, note.message, input, terminal, options);
     }
 }
 
@@ -83,7 +80,7 @@ pub fn toSlice(
 ) ![]u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
-    try render(diagnostic, input, &output.writer, options);
+    try render(diagnostic, input, .{ .writer = &output.writer, .mode = .no_color }, options);
     return output.toOwnedSlice();
 }
 
@@ -163,63 +160,57 @@ fn renderNoteBlock(
     span: Span,
     message: []const u8,
     input: []const u8,
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
     options: RenderOptions,
 ) std.Io.Writer.Error!void {
     const location = error_mod.locate(input, span.offset);
     const window = Window.init(input, location, options.context_lines);
-    try writeHeader(writer, options, location, "note", style.cyan, .{ .text = message }, input);
-    try writeSnippet(writer, input, options, window, &.{.{ .span = span, .secondary = true, .line = location.line }});
-}
-
-fn setStyle(
-    writer: *std.Io.Writer,
-    options: RenderOptions,
-    code: []const u8,
-) std.Io.Writer.Error!void {
-    if (options.enable_color) try writer.writeAll(code);
+    try writeHeader(terminal, options, location, "note", .cyan, .{ .text = message }, input);
+    try writeSnippet(terminal, input, options, window, &.{.{ .span = span, .secondary = true, .line = location.line }});
 }
 
 fn writeHeader(
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
     options: RenderOptions,
     location: Location,
     level: []const u8,
-    level_style: []const u8,
+    level_color: std.Io.Terminal.Color,
     message: Message,
     input: []const u8,
 ) std.Io.Writer.Error!void {
+    const writer = terminal.writer;
     // The Zig compiler's exact sequences: bold location, coloured level, bold message.
-    try setStyle(writer, options, style.bold);
+    applyColor(terminal, .bold);
     try writer.print("{s}:{d}:{d}: ", .{ options.source_name, location.line, location.column });
-    try setStyle(writer, options, level_style);
+    applyColor(terminal, level_color);
     try writer.print("{s}: ", .{level});
-    try setStyle(writer, options, style.reset);
-    try setStyle(writer, options, style.bold);
+    applyColor(terminal, .reset);
+    applyColor(terminal, .bold);
     try message.write(input, writer);
     try writer.writeByte('\n');
-    try setStyle(writer, options, style.reset);
+    applyColor(terminal, .reset);
 }
 
 fn writeBareNote(
-    writer: *std.Io.Writer,
-    options: RenderOptions,
+    terminal: std.Io.Terminal,
     message: []const u8,
 ) std.Io.Writer.Error!void {
-    try setStyle(writer, options, style.cyan);
+    const writer = terminal.writer;
+    applyColor(terminal, .cyan);
     try writer.writeAll("note: ");
-    try setStyle(writer, options, style.reset);
+    applyColor(terminal, .reset);
     try writer.writeAll(message);
     try writer.writeByte('\n');
 }
 
 fn writeSnippet(
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
     input: []const u8,
     options: RenderOptions,
     window: Window,
     annotations: []const Annotation,
 ) std.Io.Writer.Error!void {
+    const writer = terminal.writer;
     const width = decimalDigits(window.last_line);
     if (window.elided_before) try writer.writeAll("...\n");
 
@@ -232,7 +223,7 @@ fn writeSnippet(
         var bytes = input[line_start..line_end];
         if (std.mem.endsWith(u8, bytes, "\r")) bytes = bytes[0 .. bytes.len - 1];
         try writeSourceLine(
-            writer,
+            terminal,
             options,
             width,
             line_no,
@@ -248,7 +239,7 @@ fn writeSnippet(
 }
 
 fn writeSourceLine(
-    writer: *std.Io.Writer,
+    terminal: std.Io.Terminal,
     options: RenderOptions,
     gutter_width: usize,
     line_no: usize,
@@ -256,6 +247,7 @@ fn writeSourceLine(
     line: Line,
     annotations: []const Annotation,
 ) std.Io.Writer.Error!void {
+    const writer = terminal.writer;
     var line_annotations: [max_annotations]Placed = undefined;
     var count: usize = 0;
     for (annotations) |annotation| {
@@ -276,9 +268,9 @@ fn writeSourceLine(
         cut = Cut.around(focus, total, options.max_line_width);
     }
 
-    try setStyle(writer, options, style.dim);
+    applyColor(terminal, .dim);
     try writeGutterNumber(writer, line_no, gutter_width);
-    try setStyle(writer, options, style.reset);
+    applyColor(terminal, .reset);
 
     if (cut.left_elided or cut.right_elided or cut.to > cut.from) {
         try writer.writeByte(' ');
@@ -289,7 +281,7 @@ fn writeSourceLine(
     try writer.writeByte('\n');
 
     for (line_annotations[0..count]) |placed| {
-        try writeCaretLine(writer, options, gutter_width, cut, placed);
+        try writeCaretLine(terminal, gutter_width, cut, placed);
     }
 }
 
@@ -301,32 +293,32 @@ const Placed = struct {
 };
 
 fn writeCaretLine(
-    writer: *std.Io.Writer,
-    options: RenderOptions,
+    terminal: std.Io.Terminal,
     gutter_width: usize,
     cut: Cut,
     placed: Placed,
 ) std.Io.Writer.Error!void {
+    const writer = terminal.writer;
     const visible_start = @max(placed.column, cut.from);
     const visible_end = @min(placed.column + placed.width, cut.to);
     const width = @max(visible_end -| visible_start, 1);
     const elision: usize = if (cut.left_elided) 3 else 0;
 
-    try setStyle(writer, options, style.dim);
+    applyColor(terminal, .dim);
     try writeRepeated(writer, ' ', gutter_width);
     try writer.writeAll(" |");
-    try setStyle(writer, options, style.reset);
+    applyColor(terminal, .reset);
     try writer.writeByte(' ');
     try writeRepeated(writer, ' ', elision + (visible_start - cut.from));
 
-    try setStyle(writer, options, style.green);
+    applyColor(terminal, .green);
     if (placed.annotation.secondary) {
         try writeRepeated(writer, '-', width);
     } else {
         try writer.writeByte('^');
         try writeRepeated(writer, '~', width - 1);
     }
-    try setStyle(writer, options, style.reset);
+    applyColor(terminal, .reset);
 
     if (placed.annotation.label) |label| {
         try writer.writeByte(' ');
@@ -578,17 +570,17 @@ test "CRLF line break" {
 
 test "colours" {
     const diagnostic = check_mod.check("[1 2]", .{}).?;
-    const output = try toSlice(testing.allocator, diagnostic, "[1 2]", .{
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    try render(diagnostic, "[1 2]", .{ .writer = &output.writer, .mode = .escape_codes }, .{
         .source_name = "i",
-        .enable_color = true,
     });
-    defer testing.allocator.free(output);
     try testing.expectEqualStrings(
         "\x1b[1mi:1:4: \x1b[31merror: \x1b[0m\x1b[1mexpected ',' or ']', found '2'\n" ++
             "\x1b[0m" ++
             "\x1b[2m1 |\x1b[0m [1 2]\n" ++
             "\x1b[2m  |\x1b[0m" ++ spaces(4) ++ "\x1b[32m^\x1b[0m\n",
-        output,
+        output.written(),
     );
 }
 

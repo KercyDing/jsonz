@@ -263,10 +263,14 @@ check options for documents read with extensions enabled:
 | Field            | Description                                                |
 | ---------------- | ---------------------------------------------------------- |
 | `check`          | Check options for this document; defaults to `.{}`.        |
-| `enable_color`   | Emit ANSI styles. Never probes the terminal.               |
 | `source_name`    | Name shown in the header. Defaults to `<input>`.           |
 | `context_lines`  | Source lines shown above and below. Defaults to `3`.       |
 | `max_line_width` | Cut longer source lines around the problem. `0` shows all. |
+
+Colour is not an option: it belongs to the stream. `print` colours standard
+error whenever it is a terminal that takes escape codes, honouring `NO_COLOR`
+and `CLICOLOR_FORCE`; `printWith` writes to the `std.Io.Terminal` you hand it,
+so that stream decides; `toSlice` returns plain text.
 
 ## Development
 

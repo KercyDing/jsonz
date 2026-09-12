@@ -126,6 +126,7 @@ fn addBench(
     });
 
     exe.use_llvm = true;
+    b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
     run.addArg(mode);

@@ -27,6 +27,7 @@ const typed_datasets = [_][]const u8{
 };
 
 const Mode = enum { dom, typed };
+const Operation = enum { both, decode, encode };
 
 const Timing = struct {
     elapsed: u64,
@@ -144,6 +145,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var selected_file: ?[]const u8 = null;
     var jsonz_only = false;
+    var operation: Operation = .both;
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help")) {
             printHelp();
@@ -152,6 +154,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
             selected_file = args.next() orelse return error.InvalidArguments;
         } else if (std.mem.eql(u8, arg, "--jsonz-only")) {
             jsonz_only = true;
+        } else if (std.mem.eql(u8, arg, "--decode")) {
+            if (operation == .encode) return error.InvalidArguments;
+            operation = .decode;
+        } else if (std.mem.eql(u8, arg, "--encode")) {
+            if (operation == .decode) return error.InvalidArguments;
+            operation = .encode;
         } else return error.InvalidArguments;
     }
 
@@ -185,48 +193,59 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const repeats = repeatCount(input.len);
         std.debug.print("\n{s} ({d} bytes, {d} repeats)\n", .{ name, input.len, repeats });
 
-        const jsonz_decode = if (mode == .dom)
+        const run_decode = operation != .encode;
+        const run_encode = operation != .decode;
+
+        const jsonz_decode: ?u64 = if (!run_decode)
+            null
+        else if (mode == .dom)
             try benchJsonz(input, repeats)
         else
             try benchJsonzTyped(name, input, repeats);
-        const jsonz_encode = if (mode == .dom)
+        const jsonz_encode: ?Timing = if (!run_encode)
+            null
+        else if (mode == .dom)
             try benchJsonzEncode(input, repeats)
         else
             try benchJsonzTypedEncode(name, input, repeats);
-        const std_decode: ?u64 = if (jsonz_only)
+        const std_decode: ?u64 = if (jsonz_only or !run_decode)
             null
         else if (mode == .dom)
             try benchStd(input, repeats)
         else
             try benchStdTyped(name, input, repeats);
-        const std_encode: ?Timing = if (jsonz_only)
+        const std_encode: ?Timing = if (jsonz_only or !run_encode)
             null
         else if (mode == .dom)
             try benchStdEncode(input, repeats)
         else
             try benchStdTypedEncode(name, input, repeats);
 
-        std.debug.print("  decode\n", .{});
-        printResult("jsonz", jsonz_decode, input.len, repeats);
-        if (std_decode) |elapsed| printResult("std.json", elapsed, input.len, repeats);
-        jsonz_decode_geomean.add(jsonz_decode, input.len, repeats);
-        if (std_decode) |elapsed| std_decode_geomean.add(elapsed, input.len, repeats);
+        if (jsonz_decode) |elapsed| {
+            std.debug.print("  decode\n", .{});
+            printResult("jsonz", elapsed, input.len, repeats);
+            if (std_decode) |std_elapsed| printResult("std.json", std_elapsed, input.len, repeats);
+            jsonz_decode_geomean.add(elapsed, input.len, repeats);
+            if (std_decode) |std_elapsed| std_decode_geomean.add(std_elapsed, input.len, repeats);
+        }
 
-        std.debug.print("  encode\n", .{});
-        printResult("jsonz", jsonz_encode.elapsed, jsonz_encode.output_bytes, repeats);
-        if (std_encode) |timing| printResult("std.json", timing.elapsed, timing.output_bytes, repeats);
-        jsonz_encode_geomean.add(jsonz_encode.elapsed, jsonz_encode.output_bytes, repeats);
-        if (std_encode) |timing| {
-            std_encode_geomean.add(timing.elapsed, timing.output_bytes, repeats);
+        if (jsonz_encode) |timing| {
+            std.debug.print("  encode\n", .{});
+            printResult("jsonz", timing.elapsed, timing.output_bytes, repeats);
+            if (std_encode) |std_timing| printResult("std.json", std_timing.elapsed, std_timing.output_bytes, repeats);
+            jsonz_encode_geomean.add(timing.elapsed, timing.output_bytes, repeats);
+            if (std_encode) |std_timing| {
+                std_encode_geomean.add(std_timing.elapsed, std_timing.output_bytes, repeats);
+            }
         }
     }
 
     std.debug.print("\ngeometric mean throughput\n", .{});
-    printGeometricMean("jsonz", "decode", jsonz_decode_geomean);
-    printGeometricMean("jsonz", "encode", jsonz_encode_geomean);
+    if (operation != .encode) printGeometricMean("jsonz", "decode", jsonz_decode_geomean);
+    if (operation != .decode) printGeometricMean("jsonz", "encode", jsonz_encode_geomean);
     if (!jsonz_only) {
-        printGeometricMean("std.json", "decode", std_decode_geomean);
-        printGeometricMean("std.json", "encode", std_encode_geomean);
+        if (operation != .encode) printGeometricMean("std.json", "decode", std_decode_geomean);
+        if (operation != .decode) printGeometricMean("std.json", "encode", std_encode_geomean);
     }
 }
 
@@ -236,7 +255,9 @@ fn printHelp() void {
             "\n  dom  parse every dataset into a generic JSON value (default)\n" ++
             "  typed    parse datasets with a known Zig type\n" ++
             "  --file  run one dataset instead of all datasets\n" ++
-            "  --jsonz-only  skip the std.json comparison\n",
+            "  --jsonz-only  skip the std.json comparison\n" ++
+            "  --decode  run only decode\n" ++
+            "  --encode  run only encode\n",
         .{},
     );
 }

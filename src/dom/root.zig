@@ -3,6 +3,7 @@ const view = @import("view.zig");
 const pool = @import("pool.zig");
 const reader = @import("reader.zig");
 const writer = @import("writer.zig");
+const rfc = @import("rfc.zig");
 
 /// An owned parsed DOM document.
 pub const Document = document.Document;
@@ -12,6 +13,8 @@ pub const DocView = view.DocView;
 pub const Kind = view.Kind;
 /// Errors returned when a node cannot be accessed or converted.
 pub const AccessError = view.AccessError;
+/// Errors from resolving an RFC 6901 JSON Pointer.
+pub const PointerError = view.PointerError;
 /// Numeric target types accepted by `DocView.toNumber` and `DocView.asNumber`.
 pub const NumberType = view.NumberType;
 
@@ -40,4 +43,5 @@ test {
     _ = pool;
     _ = reader;
     _ = writer;
+    _ = rfc;
 }

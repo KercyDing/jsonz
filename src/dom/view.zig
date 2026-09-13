@@ -1,6 +1,7 @@
 const std = @import("std");
 const pool_mod = @import("pool.zig");
 const writer_mod = @import("writer.zig");
+const rfc = @import("rfc.zig");
 
 /// The JSON kind represented by a DOM value.
 pub const Kind = enum {
@@ -22,6 +23,9 @@ pub const AccessError = error{
     MissingField,
     OutOfBounds,
 };
+
+/// Errors from resolving an RFC 6901 JSON Pointer.
+pub const PointerError = rfc.PointerError;
 
 /// Numeric types accepted by `DocView.toNumber` and `DocView.asNumber`.
 pub const NumberType = enum {
@@ -273,6 +277,22 @@ pub const DocView = struct {
             .remaining = pool_mod.valueLen(self.raw().*),
             .cursor = self.index + 1,
         };
+    }
+
+    /// Resolves a comptime-known RFC 6901 JSON Pointer.
+    pub fn ptrGet(self: DocView, comptime ptr: []const u8) PointerError!DocView {
+        return rfc.resolveStatic(self, ptr);
+    }
+
+    /// Resolves a comptime-known pointer format expanded with `std.fmt`
+    /// semantics. Interpolation is textual and never escapes anything.
+    pub fn ptrGetFmt(self: DocView, comptime fmt: []const u8, args: anytype) PointerError!DocView {
+        return rfc.resolveFmt(self, fmt, args);
+    }
+
+    /// Resolves a complete RFC 6901 JSON Pointer slice known at runtime.
+    pub fn ptrGetSlice(self: DocView, ptr: []const u8) PointerError!DocView {
+        return rfc.resolve(self, ptr);
     }
 
     /// Serializes this value to a newly allocated JSON byte slice owned by `allocator`.

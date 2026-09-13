@@ -136,6 +136,26 @@ pub const Document = struct {
         return self.root().arrayIterator();
     }
 
+    /// Resolves a comptime-known RFC 6901 JSON Pointer from the root.
+    pub fn ptrGet(self: *const Document, comptime ptr: []const u8) view.PointerError!DocView {
+        return self.root().ptrGet(ptr);
+    }
+
+    /// Resolves a comptime-known pointer format from the root.
+    pub fn ptrGetFmt(
+        self: *const Document,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) view.PointerError!DocView {
+        return self.root().ptrGetFmt(fmt, args);
+    }
+
+    /// Resolves a complete RFC 6901 JSON Pointer from the root, from a runtime
+    /// slice.
+    pub fn ptrGetSlice(self: *const Document, ptr: []const u8) view.PointerError!DocView {
+        return self.root().ptrGetSlice(ptr);
+    }
+
     /// Serializes the root value to a newly allocated JSON byte slice owned by `allocator`.
     pub fn toSlice(
         self: *const Document,

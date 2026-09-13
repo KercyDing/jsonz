@@ -227,6 +227,51 @@ while (elements.next()) |element| {
 }
 ```
 
+JSON Pointer access (RFC 6901):
+
+```zig
+const id_view = try document.ptrGet("/user/profile/id");
+const id = try id_view.toNumber(.u64);
+```
+
+`ptrGet` takes a comptime pointer whose syntax, escapes, and UTF-8 are checked
+at compile time and whose tokens are split there. `ptrGetFmt` takes a comptime
+format expanded with `std.fmt` semantics, plus runtime arguments:
+
+```zig
+const name_view = try document.ptrGet("/user/profile/name");
+const name = try name_view.toString();
+
+const index: usize = 0;
+const user_view = try document.ptrGetFmt("/statuses/{d}/user", .{index});
+```
+
+`ptrGetSlice` takes a complete RFC 6901 pointer as a runtime slice:
+
+```zig
+const user_view = try document.ptrGetSlice(pointer_from_user);
+```
+
+Interpolation is textual, exactly like `std.fmt`, and never escapes anything: a
+`/` in an interpolated value separates tokens, so an object member containing
+`/` or `~` must be written as `~1` and `~0` by hand.
+
+A token is an object member or an array index depending on the node it meets,
+as RFC 6901 requires; `~1` decodes to `/`, `~0` to `~`, and object keys match by
+exact code point without Unicode normalization.
+
+Resolution reports `dom.PointerError`: `error.InvalidPointer` for a malformed
+pointer or invalid escape, `error.InvalidArrayIndex` for a token that is not an
+RFC 6901 array index (a leading zero, a sign, or an overflow),
+`error.MissingField` for an absent object member, `error.OutOfBounds` for an
+index past the end or the `-` token, `error.UnexpectedType` for a step into a
+scalar, and `error.AmbiguousMember` when a matching object member is not
+unique. `error.PointerTooLong` is possible only when a `ptrGetFmt` result does
+not fit the internal stack buffer.
+
+The RFC 6901 URI fragment representation (`#/user/id`) is not implemented;
+`pointer` accepts the JSON string representation only.
+
 `isXxx` type checks:
 
 | Method | Returns |

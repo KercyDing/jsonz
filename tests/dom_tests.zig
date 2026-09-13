@@ -151,6 +151,102 @@ test "deeply nested documents" {
     try testing.expectEqualStrings(input, output);
 }
 
+test "rfc 6901 section 5" {
+    var doc = try jsonz.dom.parse(
+        testing.allocator,
+        "{\"foo\":[\"bar\",\"baz\"],\"\":0,\"a/b\":1,\"c%d\":2,\"e^f\":3,\"g|h\":4,\"i\\\\j\":5,\"k\\\"l\":6,\" \":7,\"m~n\":8,\"~1\":9}",
+        .{},
+    );
+    defer doc.deinit();
+
+    try testing.expect((try doc.ptrGet("")).isObject());
+    try testing.expectEqualStrings("bar", try (try doc.ptrGet("/foo/0")).toString());
+    try testing.expectEqual(@as(u8, 0), try (try doc.ptrGet("/")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 1), try (try doc.ptrGet("/a~1b")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 2), try (try doc.ptrGet("/c%d")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 3), try (try doc.ptrGet("/e^f")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 4), try (try doc.ptrGet("/g|h")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 5), try (try doc.ptrGet("/i\\j")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 6), try (try doc.ptrGet("/k\"l")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 7), try (try doc.ptrGet("/ ")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 8), try (try doc.ptrGet("/m~0n")).toNumber(.u8));
+
+    // `~01` is `~0` followed by `1`, so it selects the member named "~1".
+    try testing.expectEqual(@as(u8, 9), try (try doc.ptrGet("/~01")).toNumber(.u8));
+}
+
+test "json pointer arrays and syntax" {
+    var doc = try jsonz.dom.parse(testing.allocator, "{\"a\":[10,20],\"01\":\"leading\"}", .{});
+    defer doc.deinit();
+
+    try testing.expectEqual(@as(u8, 20), try (try doc.ptrGet("/a/1")).toNumber(.u8));
+    // A leading zero is not an array index, but it is a valid object member.
+    try testing.expectEqualStrings("leading", try (try doc.ptrGet("/01")).toString());
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/01"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/00"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/+1"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/-1"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/1.0"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/"));
+    try testing.expectError(error.InvalidArrayIndex, doc.ptrGet("/a/99999999999999999999999999"));
+    try testing.expectError(error.OutOfBounds, doc.ptrGet("/a/2"));
+    try testing.expectError(error.OutOfBounds, doc.ptrGet("/a/-"));
+    try testing.expectError(error.MissingField, doc.ptrGet("/nope"));
+    try testing.expectError(error.UnexpectedType, doc.ptrGet("/a/0/deeper"));
+
+    // Malformed pointer text is only accepted from the runtime entry point.
+    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("a"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/~"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/~2"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/a\xff"));
+}
+
+test "json pointer unicode is exact" {
+    var doc = try jsonz.dom.parse(
+        testing.allocator,
+        "{\"\\u00e9\":1,\"e\\u0301\":2,\"\\u0000\":3}",
+        .{},
+    );
+    defer doc.deinit();
+
+    // Precomposed and decomposed forms are different members, not normalized.
+    try testing.expectEqual(@as(u8, 1), try (try doc.ptrGet("/\u{e9}")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 2), try (try doc.ptrGet("/e\u{301}")).toNumber(.u8));
+
+    // NUL is a valid code point in a reference token.
+    try testing.expectEqual(@as(u8, 3), try (try doc.ptrGet("/\x00")).toNumber(.u8));
+}
+
+test "json pointer duplicate member" {
+    var doc = try jsonz.dom.parse(testing.allocator, "{\"foo\":1,\"foo\":2}", .{});
+    defer doc.deinit();
+
+    try testing.expectEqual(@as(u8, 1), try (try doc.field("foo")).toNumber(.u8));
+    try testing.expectError(error.AmbiguousMember, doc.ptrGet("/foo"));
+    try testing.expectError(error.MissingField, doc.ptrGet("/bar"));
+}
+
+test "json pointer format" {
+    var doc = try jsonz.dom.parse(
+        testing.allocator,
+        "{\"statuses\":[{\"user\":{\"id\":11}}],\"objects\":{\"a\":{\"b\":5}}}",
+        .{},
+    );
+    defer doc.deinit();
+
+    const index: usize = 0;
+    const id_view = try doc.ptrGetFmt("/statuses/{}/user/id", .{index});
+    try testing.expectEqual(@as(u8, 11), try id_view.toNumber(.u8));
+
+    try testing.expectError(error.OutOfBounds, doc.ptrGetFmt("/statuses/{}/user/id", .{@as(usize, 7)}));
+
+    // `{}` is std.fmt text interpolation, so a `/` in the argument separates
+    // tokens instead of naming one member.
+    const key = "a/b";
+    const nested = try doc.ptrGetFmt("/objects/{s}", .{key});
+    try testing.expectEqual(@as(u8, 5), try nested.toNumber(.u8));
+}
+
 /// Inputs `dom.parse` rejects, with or without the permissive options.
 const malformed_inputs = [_][]const u8{
     "",

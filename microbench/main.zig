@@ -5,6 +5,7 @@ const zbench = @import("zbench");
 
 const number = "123456789.01234567e-3";
 const document = "{\"value\":123.456789,\"items\":[1,2,3],\"name\":\"jsonz\"}";
+const benchmark_allocator = std.heap.c_allocator;
 
 fn parseFloat(allocator: std.mem.Allocator) void {
     _ = allocator;
@@ -29,10 +30,10 @@ fn domRoundTrip(allocator: std.mem.Allocator) void {
 }
 
 pub fn main() !void {
-    var io_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    var io_threaded = std.Io.Threaded.init(benchmark_allocator, .{});
     defer io_threaded.deinit();
 
-    var benchmark = zbench.Benchmark.init(std.heap.smp_allocator, .{
+    var benchmark = zbench.Benchmark.init(benchmark_allocator, .{
         .time_budget_ns = 1_000_000_000,
     });
     defer benchmark.deinit();

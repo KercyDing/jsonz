@@ -167,6 +167,7 @@ fn addMicrobench(
         .root_source_file = b.path("microbench/main.zig"),
         .target = target,
         .optimize = .ReleaseFast,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "float", .module = float_mod },
             .{ .name = "jsonz", .module = jsonz_mod },

@@ -31,6 +31,42 @@ test "value access" {
     try testing.expect(items.get(4) == null);
 }
 
+test "field path" {
+    var document = try dom.parse(
+        testing.allocator,
+        "{\"user\":{\"profile\":{\"id\":7,\"name\":\"jsonz\"}}}",
+        .{},
+    );
+    defer document.deinit();
+
+    const id = document.fieldPath(.{ "user", "profile", "id" });
+    try testing.expectEqual(@as(u8, 7), try id.toNumber(.u8));
+    try testing.expect(id.failure() == null);
+
+    const name = document.fieldPath(.{ "user", "profile", "name" });
+    try testing.expectEqualStrings("jsonz", name.asString().?);
+
+    const missing = document.fieldPath(.{ "user", "profile", "email" });
+    try testing.expectError(error.MissingField, missing.toString());
+    const missing_failure = missing.failure().?;
+    try testing.expectEqual(@as(usize, 2), missing_failure.index);
+    try testing.expectEqualStrings("email", missing_failure.field);
+    try testing.expectEqual(dom.FieldPath.Reason.missing_field, missing_failure.reason);
+    try testing.expect(missing_failure.found == null);
+
+    var non_object_document = try dom.parse(testing.allocator, "{\"user\":[]}", .{});
+    defer non_object_document.deinit();
+    const non_object = non_object_document.fieldPath(.{ "user", "name" });
+    try testing.expectError(error.UnexpectedType, non_object.toString());
+    const type_failure = non_object.failure().?;
+    try testing.expectEqual(@as(usize, 1), type_failure.index);
+    try testing.expectEqualStrings("name", type_failure.field);
+    try testing.expectEqual(dom.FieldPath.Reason.expected_object, type_failure.reason);
+    try testing.expectEqual(@as(?dom.Kind, .array), type_failure.found);
+
+    try testing.expect((try document.fieldPath(.{}).toObject()).get("user") != null);
+}
+
 test "container iteration" {
     var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2}", .{});
     defer document.deinit();

@@ -143,6 +143,11 @@ pub const Document = struct {
         return self.root().field(key);
     }
 
+    /// Traverses a comptime-known sequence of root-object fields without allocating.
+    pub fn fieldPath(self: *const Document, comptime fields: anytype) value.FieldPath {
+        return self.root().fieldPath(fields);
+    }
+
     /// Serializes the root value to a newly allocated JSON byte slice owned by `allocator`.
     pub fn toSlice(
         self: *const Document,

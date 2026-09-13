@@ -226,6 +226,39 @@ pub const Value = struct {
         return (try self.toObject()).field(key);
     }
 
+    /// Traverses a comptime-known sequence of object fields without allocating.
+    pub fn fieldPath(self: Value, comptime fields: anytype) FieldPath {
+        var current: ?Value = self;
+        var failure_info: ?FieldPath.Failure = null;
+
+        inline for (fields, 0..) |field_name, index| {
+            const key: []const u8 = field_name;
+            if (current) |value| {
+                if (value.asObject()) |object| {
+                    current = object.get(key) orelse blk: {
+                        failure_info = .{
+                            .index = index,
+                            .field = key,
+                            .reason = .missing_field,
+                            .found = null,
+                        };
+                        break :blk null;
+                    };
+                } else {
+                    current = null;
+                    failure_info = .{
+                        .index = index,
+                        .field = key,
+                        .reason = .expected_object,
+                        .found = value.kind(),
+                    };
+                }
+            }
+        }
+
+        return .{ .value = current, .failure_info = failure_info };
+    }
+
     /// Serializes this value to a newly allocated JSON byte slice owned by `allocator`.
     pub fn toSlice(
         self: Value,
@@ -242,6 +275,78 @@ pub const Value = struct {
         options: WriteOptions,
     ) !void {
         return writer_mod.toWriter(writer, self, options);
+    }
+};
+
+/// The result of a `Value.fieldPath` traversal.
+pub const FieldPath = struct {
+    value: ?Value,
+    failure_info: ?Failure,
+
+    /// Information about the first failed field lookup.
+    pub const Failure = struct {
+        index: usize,
+        field: []const u8,
+        reason: Reason,
+        found: ?Kind,
+    };
+
+    pub const Reason = enum {
+        missing_field,
+        expected_object,
+    };
+
+    /// Returns information about the first failed field lookup, if any.
+    pub fn failure(self: FieldPath) ?Failure {
+        return self.failure_info;
+    }
+
+    fn resolve(self: FieldPath) ValueError!Value {
+        if (self.value) |value| return value;
+        return switch ((self.failure_info orelse return error.UnexpectedType).reason) {
+            .missing_field => error.MissingField,
+            .expected_object => error.UnexpectedType,
+        };
+    }
+
+    pub fn toBool(self: FieldPath) ValueError!bool {
+        return (try self.resolve()).toBool();
+    }
+
+    pub fn toNumber(self: FieldPath, comptime target: NumberType) ValueError!target.Type() {
+        return (try self.resolve()).toNumber(target);
+    }
+
+    pub fn toString(self: FieldPath) ValueError![]const u8 {
+        return (try self.resolve()).toString();
+    }
+
+    pub fn toArray(self: FieldPath) ValueError!Array {
+        return (try self.resolve()).toArray();
+    }
+
+    pub fn toObject(self: FieldPath) ValueError!Object {
+        return (try self.resolve()).toObject();
+    }
+
+    pub fn asBool(self: FieldPath) ?bool {
+        return if (self.value) |value| value.asBool() else null;
+    }
+
+    pub fn asNumber(self: FieldPath, comptime target: NumberType) ?target.Type() {
+        return if (self.value) |value| value.asNumber(target) else null;
+    }
+
+    pub fn asString(self: FieldPath) ?[]const u8 {
+        return if (self.value) |value| value.asString() else null;
+    }
+
+    pub fn asArray(self: FieldPath) ?Array {
+        return if (self.value) |value| value.asArray() else null;
+    }
+
+    pub fn asObject(self: FieldPath) ?Object {
+        return if (self.value) |value| value.asObject() else null;
     }
 };
 

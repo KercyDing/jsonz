@@ -206,6 +206,23 @@ array.get(0)          // ?Value
 try array.at(0)       // Value
 ```
 
+Nested object access:
+
+```zig
+const id = try document
+    .fieldPath(.{ "user", "profile", "id" })
+    .toNumber(.u64);
+
+const name = document
+    .fieldPath(.{ "user", "profile", "name" })
+    .asString();
+```
+
+`fieldPath` accepts a comptime-known sequence of object fields and is expanded
+inline without allocating. `toXxx` reports the first path failure as an error;
+`asXxx` returns `null`. Use `failure()` when diagnostics need the failed field,
+its path index, and the encountered JSON kind.
+
 `isXxx` type checks:
 
 | Method | Returns |

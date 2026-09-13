@@ -14,6 +14,8 @@ pub const Kind = value.Kind;
 pub const ValueError = value.ValueError;
 /// Numeric target types accepted by `Value.asNumber`.
 pub const NumberType = value.NumberType;
+/// The result of a nested `fieldPath` lookup.
+pub const FieldPath = value.FieldPath;
 /// A borrowed DOM object view.
 pub const Object = value.Object;
 /// A borrowed key/value pair from a DOM object.

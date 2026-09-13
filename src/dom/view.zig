@@ -290,8 +290,8 @@ pub const DocView = struct {
         return rfc.resolveFmt(self, fmt, args);
     }
 
-    /// Resolves a complete RFC 6901 JSON Pointer slice known at runtime.
-    pub fn ptrGetSlice(self: DocView, ptr: []const u8) PointerError!DocView {
+    /// Resolves a complete RFC 6901 JSON Pointer known only at runtime.
+    pub fn ptrGetDyn(self: DocView, ptr: []const u8) PointerError!DocView {
         return rfc.resolve(self, ptr);
     }
 

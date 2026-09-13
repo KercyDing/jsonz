@@ -189,7 +189,7 @@ const allocator = std.heap.c_allocator;
 | `get(key)`, `field(key)` | Root object member. |
 | `getAt(index)`, `at(index)` | Root array element. |
 | `objectIterator()`, `arrayIterator()` | Root container iteration. |
-| `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetSlice(ptr)` | Root JSON Pointer. |
+| `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
 
 For caller-provided storage:
@@ -264,7 +264,7 @@ Integer-to-floating-point conversion may lose precision.
 | --- | --- | --- |
 | `ptrGet("/user/id")` | `PointerError!DocView` | Comptime RFC 6901 pointer. |
 | `ptrGetFmt("/users/{}/id", .{index})` | `PointerError!DocView` | Comptime format plus runtime arguments. |
-| `ptrGetSlice(ptr)` | `PointerError!DocView` | A complete pointer from a runtime slice. |
+| `ptrGetDyn(ptr)` | `PointerError!DocView` | A complete pointer known only at runtime. |
 
 `ptrGet` checks syntax, escapes and UTF-8 at compile time and splits tokens
 there. `ptrGetFmt` expands its format with `std.fmt` semantics into a fixed
@@ -280,7 +280,7 @@ normalization. A pointer that matches more than one object member is
 `error.AmbiguousMember`.
 
 The RFC 6901 URI fragment representation (`#/user/id`) is not implemented;
-`ptrGetSlice` accepts the JSON string representation only.
+`ptrGetDyn` accepts the JSON string representation only.
 
 ## `jsonz.diagnostic`
 

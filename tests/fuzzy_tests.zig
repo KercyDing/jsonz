@@ -544,7 +544,7 @@ fn fuzzPointer(context: PointerFuzz, smith: *std.testing.Smith) !void {
     try writePointer(smith, &pointer);
 
     const expected = referencePointer(context.reference, pointer.items);
-    const actual = context.document.ptrGetSlice(pointer.items);
+    const actual = context.document.ptrGetDyn(pointer.items);
 
     if (expected) |value| {
         const view = actual catch |failure| {

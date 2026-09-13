@@ -195,10 +195,10 @@ test "json pointer arrays and syntax" {
     try testing.expectError(error.UnexpectedType, doc.ptrGet("/a/0/deeper"));
 
     // Malformed pointer text is only accepted from the runtime entry point.
-    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("a"));
-    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/~"));
-    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/~2"));
-    try testing.expectError(error.InvalidPointer, doc.ptrGetSlice("/a\xff"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetDyn("a"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetDyn("/~"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetDyn("/~2"));
+    try testing.expectError(error.InvalidPointer, doc.ptrGetDyn("/a\xff"));
 }
 
 test "json pointer unicode is exact" {

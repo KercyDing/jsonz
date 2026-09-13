@@ -150,10 +150,10 @@ pub const Document = struct {
         return self.root().ptrGetFmt(fmt, args);
     }
 
-    /// Resolves a complete RFC 6901 JSON Pointer from the root, from a runtime
-    /// slice.
-    pub fn ptrGetSlice(self: *const Document, ptr: []const u8) view.PointerError!DocView {
-        return self.root().ptrGetSlice(ptr);
+    /// Resolves a complete RFC 6901 JSON Pointer from the root, known only at
+    /// runtime.
+    pub fn ptrGetDyn(self: *const Document, ptr: []const u8) view.PointerError!DocView {
+        return self.root().ptrGetDyn(ptr);
     }
 
     /// Serializes the root node to a newly allocated JSON byte slice owned by `allocator`.

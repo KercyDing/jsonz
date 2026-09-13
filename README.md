@@ -106,11 +106,11 @@ const id = try id_view.toNumber(.u64);
 ```
 
 `ptrGet` takes a comptime pointer, `ptrGetFmt` a comptime format with runtime
-arguments, and `ptrGetSlice` a complete pointer from a runtime slice:
+arguments, and `ptrGetDyn` a complete pointer known only at runtime:
 
 ```zig
 const user_view = try document.ptrGetFmt("/statuses/{d}/user", .{index});
-const other_view = try document.ptrGetSlice(pointer_from_user);
+const other_view = try document.ptrGetDyn(pointer_from_user);
 ```
 
 ### Diagnosing invalid JSON

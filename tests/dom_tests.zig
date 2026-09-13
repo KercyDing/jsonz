@@ -19,15 +19,15 @@ test "value access" {
     defer document.deinit();
 
     try testing.expect(document.isObject());
-    try testing.expect(document.field("enabled").bool());
-    try testing.expectEqual(@as(u64, 42), document.field("count").uint());
+    try testing.expect(try (try document.field("enabled")).toBool());
+    try testing.expectEqual(@as(u64, 42), try (try document.field("count")).toNumber(.u64));
     try testing.expect(document.get("missing") == null);
 
-    const items = document.field("items").array();
-    try testing.expect(items.at(0).isNull());
-    try testing.expectEqualStrings("jsonz", items.at(1).string());
-    try testing.expectEqual(@as(i64, -7), items.at(2).int());
-    try testing.expectEqual(@as(f64, 1.5), items.at(3).float());
+    const items = try (try document.field("items")).toArray();
+    try testing.expect((try items.at(0)).isNull());
+    try testing.expectEqualStrings("jsonz", try (try items.at(1)).toString());
+    try testing.expectEqual(@as(i64, -7), try (try items.at(2)).toNumber(.i64));
+    try testing.expectEqual(@as(f64, 1.5), try (try items.at(3)).toNumber(.f64));
     try testing.expect(items.get(4) == null);
 }
 
@@ -35,7 +35,7 @@ test "container iteration" {
     var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2}", .{});
     defer document.deinit();
 
-    var iterator = document.object().iterator();
+    var iterator = (try document.toObject()).iterator();
     var count: usize = 0;
     while (iterator.next()) |entry| {
         try testing.expect(entry.value.isUint());
@@ -44,7 +44,7 @@ test "container iteration" {
     }
     try testing.expectEqual(@as(usize, 2), count);
 
-    var elements = document.object().get("a").?.kind();
+    var elements = (try document.toObject()).get("a").?.kind();
     try testing.expectEqual(dom.Kind.uint, elements);
     elements = document.root().kind();
     try testing.expectEqual(dom.Kind.object, elements);
@@ -62,17 +62,22 @@ test "access past a container child" {
     );
     defer document.deinit();
 
-    try testing.expectEqual(@as(u64, 5), document.field("d").uint());
-    try testing.expectEqual(@as(u64, 3), document.field("b").field("c").array().at(0).uint());
-    try testing.expectEqual(@as(u64, 4), document.field("b").field("c").array().at(1).uint());
-    try testing.expectEqual(@as(usize, 0), document.field("e").array().len());
-    try testing.expectEqual(@as(u64, 7), document.field("f").array().at(1).array().at(0).uint());
-    try testing.expectEqual(@as(u64, 8), document.field("f").array().at(1).array().at(1).uint());
+    try testing.expectEqual(@as(u64, 5), try (try document.field("d")).toNumber(.u64));
+    const b_array = try (try (try document.field("b")).toObject()).field("c");
+    const b_values = try b_array.toArray();
+    try testing.expectEqual(@as(u64, 3), try (try b_values.at(0)).toNumber(.u64));
+    try testing.expectEqual(@as(u64, 4), try (try b_values.at(1)).toNumber(.u64));
+    const empty = try (try document.field("e")).toArray();
+    try testing.expectEqual(@as(usize, 0), empty.len());
+    const f_array = try (try document.field("f")).toArray();
+    const nested = try (try f_array.at(1)).toArray();
+    try testing.expectEqual(@as(u64, 7), try (try nested.at(0)).toNumber(.u64));
+    try testing.expectEqual(@as(u64, 8), try (try nested.at(1)).toNumber(.u64));
     try testing.expect(document.get("missing") == null);
 
     // "c" belongs to "b", so the top level has five fields.
     const keys = [_][]const u8{ "a", "b", "d", "e", "f" };
-    var fields = document.object().iterator();
+    var fields = (try document.toObject()).iterator();
     var field_index: usize = 0;
     while (fields.next()) |entry| : (field_index += 1) {
         try testing.expectEqualStrings(keys[field_index], entry.key);
@@ -82,13 +87,16 @@ test "access past a container child" {
     var list = try dom.parse(testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
     defer list.deinit();
 
-    const array = list.array();
+    const array = try list.toArray();
     try testing.expectEqual(@as(usize, 5), array.len());
-    try testing.expectEqual(@as(u64, 1), array.at(0).array().at(0).uint());
-    try testing.expectEqual(@as(u64, 3), array.at(1).array().at(1).array().at(0).uint());
-    try testing.expectEqual(@as(u64, 4), array.at(2).uint());
-    try testing.expectEqual(@as(usize, 0), array.at(3).array().len());
-    try testing.expectEqual(@as(u64, 5), array.at(4).uint());
+    const first_nested = try (try array.at(0)).toArray();
+    try testing.expectEqual(@as(u64, 1), try (try first_nested.at(0)).toNumber(.u64));
+    const nested_array = try (try array.at(1)).toArray();
+    const deeply_nested = try (try nested_array.at(1)).toArray();
+    try testing.expectEqual(@as(u64, 3), try (try deeply_nested.at(0)).toNumber(.u64));
+    try testing.expectEqual(@as(u64, 4), try (try array.at(2)).toNumber(.u64));
+    try testing.expectEqual(@as(usize, 0), (try (try array.at(3)).toArray()).len());
+    try testing.expectEqual(@as(u64, 5), try (try array.at(4)).toNumber(.u64));
     try testing.expect(array.get(5) == null);
 
     var elements = array.iterator();
@@ -109,7 +117,7 @@ test "document serialization" {
 
     var writer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer writer.deinit();
-    try document.field("name").toWriter(&writer.writer, .{});
+    try (try document.field("name")).toWriter(&writer.writer, .{});
     try testing.expectEqualStrings("\"jsonz\"", writer.written());
 }
 
@@ -117,8 +125,8 @@ test "escaped strings round trip" {
     var document = try dom.parse(testing.allocator, "{\"text\":\"line\\n\\u4e16\\u754c\",\"face\":\"\\ud83d\\ude00\"}", .{});
     defer document.deinit();
 
-    try testing.expectEqualStrings("line\n\u{4e16}\u{754c}", document.field("text").string());
-    try testing.expectEqualStrings("\u{1f600}", document.field("face").string());
+    try testing.expectEqualStrings("line\n\u{4e16}\u{754c}", try (try document.field("text")).toString());
+    try testing.expectEqualStrings("\u{1f600}", try (try document.field("face")).toString());
 
     const output = try document.toSlice(testing.allocator, .{});
     defer testing.allocator.free(output);

@@ -91,8 +91,9 @@ const input =
 var document = try jsonz.dom.parse(allocator, input, .{});
 defer document.deinit();
 
-const name = document.field("name").string();
-const first_tag = document.field("tags").array().at(0).string();
+const name = try (try document.field("name")).toString();
+const tags = try (try document.field("tags")).toArray();
+const first_tag = try (try tags.at(0)).toString();
 
 std.debug.print("{s}: {s}\n", .{ name, first_tag });
 ```
@@ -102,17 +103,15 @@ Use `Object.get` or `Array.get` when a field or array element may be absent:
 ```zig
 if (document.get("name")) |name| {
     if (name.isString()) {
-        std.debug.print("{s}\n", .{name.string()});
+        std.debug.print("{s}\n", .{try name.toString()});
     }
 }
 ```
 
-`field` and `at` assert that the requested element exists.
-`isString`, `isArray`, and other `isXxx` methods check the runtime JSON type; `string`, `array`, and other value accessors assert that the type matches.
-
-Numeric accessors such as `int`, `uint`, and `float` require the exact JSON
-number kind. Use `asInt`, `asUint`, or `asFloat` when a numeric conversion may
-be needed; these return `null` when conversion is not possible.
+`get` returns `null` when the container type does not match or the element is
+missing. `field` and `at` return an error when the container type is wrong or
+the requested element does not exist.
+`isString`, `isArray`, and other `isXxx` methods check the runtime JSON type.
 
 ### Diagnosing invalid JSON
 
@@ -197,28 +196,50 @@ Object access:
 
 ```zig
 object.get("name")    // ?Value
-object.field("name")  // Value
+try object.field("name")  // Value
 ```
 
 Array access:
 
 ```zig
 array.get(0)          // ?Value
-array.at(0)           // Value
+try array.at(0)       // Value
 ```
 
-Type access:
+`isXxx` type checks:
 
-```zig
-value.isString()      // bool
-value.string()        // []const u8
+| Method | Returns |
+| --- | --- |
+| `isNull()` | `bool` |
+| `isBool()` | `bool` |
+| `isInt()` | `bool` |
+| `isUint()` | `bool` |
+| `isFloat()` | `bool` |
+| `isString()` | `bool` |
+| `isArray()` | `bool` |
+| `isObject()` | `bool` |
 
-value.isArray()       // bool
-value.array()         // Array
+`toXxx` strict access:
 
-value.isObject()      // bool
-value.object()        // Object
-```
+| Method | Returns | Failure |
+| --- | --- | --- |
+| `toBool()` | `ValueError!bool` | not a boolean |
+| `toNumber(.xxx)` | `ValueError!T` | not numeric or out of range |
+| `toString()` | `ValueError![]const u8` | not a string |
+| `toArray()` | `ValueError!Array` | not an array |
+| `toObject()` | `ValueError!Object` | not an object |
+
+`asXxx` optional access:
+
+| Method | Returns | Failure |
+| --- | --- | --- |
+| `asNumber(.xxx)` | `?T` | not numeric or out of range |
+| `asBool()` | `?bool` | not a boolean |
+| `asString()` | `?[]const u8` | not a string |
+| `asArray()` | `?Array` | not an array |
+| `asObject()` | `?Object` | not an object |
+
+Integer-to-floating-point conversion may lose precision.
 
 Both `Document` and `Value` provide `.toSlice()` and `.toWriter()`.
 

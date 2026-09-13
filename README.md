@@ -110,6 +110,10 @@ if (document.get("name")) |name| {
 `field` and `at` assert that the requested element exists.
 `isString`, `isArray`, and other `isXxx` methods check the runtime JSON type; `string`, `array`, and other value accessors assert that the type matches.
 
+Numeric accessors such as `int`, `uint`, and `float` require the exact JSON
+number kind. Use `asInt`, `asUint`, or `asFloat` when a numeric conversion may
+be needed; these return `null` when conversion is not possible.
+
 ### Diagnosing invalid JSON
 
 `jsonz.diagnostic` reviews JSON: it reports the first format problem, with the

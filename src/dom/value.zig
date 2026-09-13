@@ -118,6 +118,37 @@ pub const Value = struct {
         return self.raw().payload.float;
     }
 
+    /// Returns this value as a signed integer when it is an integer that fits
+    /// in `i64`; otherwise returns `null`.
+    pub fn asInt(self: Value) ?i64 {
+        return switch (self.kind()) {
+            .int => self.int(),
+            .uint => if (self.uint() <= std.math.maxInt(i64)) @intCast(self.uint()) else null,
+            else => null,
+        };
+    }
+
+    /// Returns this value as an unsigned integer when it is a non-negative
+    /// integer that fits in `u64`; otherwise returns `null`.
+    pub fn asUint(self: Value) ?u64 {
+        return switch (self.kind()) {
+            .uint => self.uint(),
+            .int => if (self.int() >= 0) @intCast(self.int()) else null,
+            else => null,
+        };
+    }
+
+    /// Returns this value as an `f64`. Integer values are converted and may
+    /// lose precision; non-numeric values return `null`.
+    pub fn asFloat(self: Value) ?f64 {
+        return switch (self.kind()) {
+            .float => self.float(),
+            .int => @floatFromInt(self.int()),
+            .uint => @floatFromInt(self.uint()),
+            else => null,
+        };
+    }
+
     /// Returns a string slice borrowed from the document. Asserts that `isString()` is true.
     pub fn string(self: Value) []const u8 {
         std.debug.assert(self.isString());
@@ -165,6 +196,35 @@ pub const Value = struct {
         return writer_mod.toWriter(writer, self, options);
     }
 };
+
+test "safe numeric access" {
+    const raw_values = [_]pool_mod.Value{
+        .{ .tag = pool_mod.makeTag(.number, .none, 0), .payload = .{ .uint = 42 } },
+        .{ .tag = pool_mod.makeTag(.number, .one, 0), .payload = .{ .int = -7 } },
+        .{ .tag = pool_mod.makeTag(.number, .real, 0), .payload = .{ .float = 1.5 } },
+        .{ .tag = pool_mod.makeTag(.number, .none, 0), .payload = .{ .uint = std.math.maxInt(u64) } },
+        .{ .tag = pool_mod.makeTag(.bool, .one, 0), .payload = .{ .uint = 0 } },
+    };
+    const storage = Storage{ .values = &raw_values, .input = &.{} };
+    const value = Value{ .storage = &storage, .index = 0 };
+    const signed = Value{ .storage = &storage, .index = 1 };
+    const floating = Value{ .storage = &storage, .index = 2 };
+    const large = Value{ .storage = &storage, .index = 3 };
+    const boolean = Value{ .storage = &storage, .index = 4 };
+
+    try std.testing.expectEqual(@as(?i64, 42), value.asInt());
+    try std.testing.expectEqual(@as(?u64, 42), value.asUint());
+    try std.testing.expectEqual(@as(?f64, 42.0), value.asFloat());
+    try std.testing.expectEqual(@as(?i64, -7), signed.asInt());
+    try std.testing.expect(signed.asUint() == null);
+    try std.testing.expectEqual(@as(?f64, -7.0), signed.asFloat());
+    try std.testing.expect(floating.asInt() == null);
+    try std.testing.expect(floating.asUint() == null);
+    try std.testing.expectEqual(@as(?f64, 1.5), floating.asFloat());
+    try std.testing.expect(large.asInt() == null);
+    try std.testing.expectEqual(@as(?u64, std.math.maxInt(u64)), large.asUint());
+    try std.testing.expect(boolean.asFloat() == null);
+}
 
 /// A borrowed view of a JSON array.
 pub const Array = struct {

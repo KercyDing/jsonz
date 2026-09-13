@@ -31,7 +31,6 @@ const jsonz = b.dependency("jsonz", .{
 });
 
 exe.root_module.addImport("jsonz", jsonz.module("jsonz"));
-exe.root_module.link_libc = true; // recommended: faster when parsing many documents in one process
 ```
 
 ## Quick Start
@@ -89,7 +88,7 @@ const input =
     \\}
 ;
 
-var document = try jsonz.dom.parse(input, .{});
+var document = try jsonz.dom.parse(allocator, input, .{});
 defer document.deinit();
 
 const name = document.field("name").string();
@@ -172,15 +171,21 @@ Serialization options:
 
 | API                   | Description                                             |
 | --------------------- | ------------------------------------------------------- |
-| `dom.parse`           | Parse arbitrary JSON into a `Document`.                 |
-| `dom.parseWith`       | Parse into a `Document` allocated by a given allocator. |
+| `dom.parse`           | Parse arbitrary JSON into a `Document` with the given allocator. |
 | `dom.parseInto`       | Parse using caller-provided DOM storage.                |
 | `dom.parseBufferSize` | Compute the storage required by `parseInto`.            |
 
-`dom.parse` allocates with `std.heap.c_allocator` when libc is linked and
-`std.heap.smp_allocator` otherwise; the former reuses the heap across parses.
-Pass an allocator to `parseWith` to choose a different one, or reuse a buffer
-through `parseInto` to avoid allocating on every parse.
+Pass an allocator to `parse` to choose the allocation strategy, or reuse a
+buffer through `parseInto` to avoid allocating on every parse.
+
+For workloads that parse many documents in one process,
+`std.heap.c_allocator` is recommended because it reuses freed heap blocks
+efficiently. The application must link libc when using it:
+
+```zig
+exe.root_module.link_libc = true;
+const allocator = std.heap.c_allocator;
+```
 
 A `Document` owns its parsed storage. `Value` instances and returned strings borrow that storage and must not outlive the document.
 

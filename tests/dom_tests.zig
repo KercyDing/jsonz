@@ -11,7 +11,7 @@ const diag = jsonz.diagnostic;
 const testing = std.testing;
 
 test "value access" {
-    var document = try dom.parseWith(
+    var document = try dom.parse(
         testing.allocator,
         "{\"enabled\":true,\"count\":42,\"items\":[null,\"jsonz\",-7,1.5]}",
         .{},
@@ -32,7 +32,7 @@ test "value access" {
 }
 
 test "container iteration" {
-    var document = try dom.parseWith(testing.allocator, "{\"a\":1,\"b\":2}", .{});
+    var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2}", .{});
     defer document.deinit();
 
     var iterator = document.object().iterator();
@@ -55,7 +55,7 @@ test "access past a container child" {
     // iterators must step over it instead of by a fixed slot count. Every
     // container here is followed by a later sibling, which is what a fixed
     // stride gets wrong.
-    var document = try dom.parseWith(
+    var document = try dom.parse(
         testing.allocator,
         "{\"a\":[1,2],\"b\":{\"c\":[3,4]},\"d\":5,\"e\":[],\"f\":[[6],[7,8]]}",
         .{},
@@ -79,7 +79,7 @@ test "access past a container child" {
     }
     try testing.expectEqual(keys.len, field_index);
 
-    var list = try dom.parseWith(testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
+    var list = try dom.parse(testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
     defer list.deinit();
 
     const array = list.array();
@@ -100,7 +100,7 @@ test "access past a container child" {
 }
 
 test "document serialization" {
-    var document = try dom.parseWith(testing.allocator, "{\"name\":\"jsonz\",\"values\":[1,2]}", .{});
+    var document = try dom.parse(testing.allocator, "{\"name\":\"jsonz\",\"values\":[1,2]}", .{});
     defer document.deinit();
 
     const output = try document.toSlice(testing.allocator, .{});
@@ -114,7 +114,7 @@ test "document serialization" {
 }
 
 test "escaped strings round trip" {
-    var document = try dom.parseWith(testing.allocator, "{\"text\":\"line\\n\\u4e16\\u754c\",\"face\":\"\\ud83d\\ude00\"}", .{});
+    var document = try dom.parse(testing.allocator, "{\"text\":\"line\\n\\u4e16\\u754c\",\"face\":\"\\ud83d\\ude00\"}", .{});
     defer document.deinit();
 
     try testing.expectEqualStrings("line\n\u{4e16}\u{754c}", document.field("text").string());
@@ -135,7 +135,7 @@ test "deeply nested documents" {
     @memset(input[0..depth], '[');
     @memset(input[depth..], ']');
 
-    var document = try dom.parseWith(testing.allocator, input, .{});
+    var document = try dom.parse(testing.allocator, input, .{});
     defer document.deinit();
 
     // Neither the reader nor the writer may recurse.
@@ -288,7 +288,7 @@ const option_sets = [_]dom.ParseOptions{
 };
 
 fn domAccepts(input: []const u8, options: dom.ParseOptions) !bool {
-    var document = dom.parseWith(testing.allocator, input, options) catch |failure| switch (failure) {
+    var document = dom.parse(testing.allocator, input, options) catch |failure| switch (failure) {
         error.InvalidJson => return false,
         error.OutOfMemory => return failure,
     };

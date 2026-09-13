@@ -288,13 +288,13 @@ fn repeatCount(size: usize) usize {
 }
 
 fn benchJsonz(input: []const u8, repeats: usize) !u64 {
-    var warmup = try jsonz.dom.parse(input, .{});
+    var warmup = try jsonz.dom.parse(allocator, input, .{});
     warmup.deinit();
 
     var elapsed: u64 = 0;
     for (0..repeats) |_| {
         const start = nowNs();
-        var parsed = try jsonz.dom.parse(input, .{});
+        var parsed = try jsonz.dom.parse(allocator, input, .{});
         const end = nowNs();
         std.mem.doNotOptimizeAway(parsed.root());
         parsed.deinit();
@@ -320,7 +320,7 @@ fn benchStd(input: []const u8, repeats: usize) !u64 {
 }
 
 fn benchJsonzEncode(input: []const u8, repeats: usize) !Timing {
-    var fixture = try jsonz.dom.parse(input, .{});
+    var fixture = try jsonz.dom.parse(allocator, input, .{});
     defer fixture.deinit();
     const warmup = try fixture.toSlice(allocator, .{});
     defer allocator.free(warmup);

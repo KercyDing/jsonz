@@ -20,7 +20,7 @@ fn parseFloat(allocator: std.mem.Allocator) void {
 fn domRoundTrip(allocator: std.mem.Allocator) void {
     var length: usize = 0;
     for (0..10) |_| {
-        var parsed = jsonz.dom.parseWith(allocator, document, .{}) catch unreachable;
+        var parsed = jsonz.dom.parse(allocator, document, .{}) catch unreachable;
         defer parsed.deinit();
         const output = parsed.toSlice(allocator, .{}) catch unreachable;
         length ^= output.len;

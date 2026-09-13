@@ -160,7 +160,7 @@ fn typedAccepts(comptime T: type, input: []const u8) bool {
 }
 
 fn expectDomAccepts(input: []const u8, options: jsonz.dom.ParseOptions) !void {
-    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
+    var document = jsonz.dom.parse(std.testing.allocator, input, options) catch |failure| switch (failure) {
         error.InvalidJson => {
             std.debug.print("typed parser accepted invalid JSON: {s}\n", .{input});
             return error.TestUnexpectedResult;
@@ -335,7 +335,7 @@ fn isStrict(options: jsonz.dom.ParseOptions) bool {
 }
 
 fn domAccepts(input: []const u8, options: jsonz.dom.ParseOptions) error{OutOfMemory}!bool {
-    var document = jsonz.dom.parseWith(std.testing.allocator, input, options) catch |failure| switch (failure) {
+    var document = jsonz.dom.parse(std.testing.allocator, input, options) catch |failure| switch (failure) {
         error.InvalidJson => return false,
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -397,12 +397,12 @@ fn expectDiagnosticReport(
 /// Serializing a parsed document must reach a fixed point, so parsing and
 /// writing it again cannot drift.
 fn expectDomRoundTrip(allocator: std.mem.Allocator, input: []const u8, options: jsonz.dom.ParseOptions) !void {
-    var document = try jsonz.dom.parseWith(allocator, input, options);
+    var document = try jsonz.dom.parse(allocator, input, options);
     defer document.deinit();
     const first = try document.toSlice(allocator, .{});
     defer allocator.free(first);
 
-    var again = try jsonz.dom.parseWith(allocator, first, options);
+    var again = try jsonz.dom.parse(allocator, first, options);
     defer again.deinit();
     const second = try again.toSlice(allocator, .{});
     defer allocator.free(second);

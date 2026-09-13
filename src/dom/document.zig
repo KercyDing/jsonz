@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const pool_mod = @import("pool.zig");
 const reader = @import("reader.zig");
 const value = @import("value.zig");
@@ -148,30 +147,11 @@ pub const Document = struct {
     }
 };
 
-/// The allocator `parse` uses on its own: `std.heap.c_allocator` when libc is
-/// linked, and `std.heap.smp_allocator` otherwise.
-///
-/// Parsing allocates and frees a whole document each time. Malloc reuses those
-/// blocks, while Zig's page-based allocator returns them to the OS and faults
-/// them back in on the next parse, so libc is the better default.
-pub const default_allocator: std.mem.Allocator = if (builtin.link_libc)
-    std.heap.c_allocator
-else
-    std.heap.smp_allocator;
-
-/// Parses JSON into an owned DOM document using `default_allocator`.
-///
-/// Use `parseWith` to choose the allocator, or `parseInto` to parse without
-/// one. Call `Document.deinit` to release the result.
-pub fn parse(input: []const u8, options: ParseOptions) ParseError!Document {
-    return parseWith(default_allocator, input, options);
-}
-
 /// Parses JSON into an owned DOM document allocated with `allocator`.
 ///
 /// The document owns a mutable copy of `input` because string escapes are
 /// decoded in place.
-pub fn parseWith(
+pub fn parse(
     allocator: std.mem.Allocator,
     input: []const u8,
     options: ParseOptions,
@@ -275,10 +255,10 @@ test "caller storage" {
 test "parse options" {
     try std.testing.expectError(
         error.InvalidJson,
-        parseWith(std.testing.allocator, "{/* note */ \"value\": 1,}", .{}),
+        parse(std.testing.allocator, "{/* note */ \"value\": 1,}", .{}),
     );
 
-    var document = try parseWith(std.testing.allocator, "{/* note */ \"value\": 1,}", .{
+    var document = try parse(std.testing.allocator, "{/* note */ \"value\": 1,}", .{
         .allow_comments = true,
         .allow_trailing_commas = true,
     });
@@ -287,14 +267,14 @@ test "parse options" {
 }
 
 test "escaped keys are matched by content" {
-    var document = try parseWith(std.testing.allocator, "{\"\\u0061\\u0062\":1,\"a\":2}", .{});
+    var document = try parse(std.testing.allocator, "{\"\\u0061\\u0062\":1,\"a\":2}", .{});
     defer document.deinit();
     try std.testing.expectEqual(@as(u64, 1), document.field("ab").uint());
     try std.testing.expectEqual(@as(u64, 2), document.field("a").uint());
 }
 
 test "invalid input" {
-    try std.testing.expectError(error.InvalidJson, parse("{", .{}));
-    try std.testing.expectError(error.InvalidJson, parse("[1]x", .{}));
-    try std.testing.expectError(error.InvalidJson, parse("[1 2]", .{}));
+    try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "{", .{}));
+    try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "[1]x", .{}));
+    try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "[1 2]", .{}));
 }

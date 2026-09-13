@@ -1018,7 +1018,7 @@ test "whitespace between tokens" {
         // Root object + 2 keys + array + 2 numbers + string = 7 values.
         try std.testing.expectEqual(@as(usize, 7), result[0].items().len);
 
-        var document = try @import("document.zig").parseWith(std.testing.allocator, input, .{});
+        var document = try @import("document.zig").parse(std.testing.allocator, input, .{});
         defer document.deinit();
         const output = try document.toSlice(std.testing.allocator, .{});
         defer std.testing.allocator.free(output);

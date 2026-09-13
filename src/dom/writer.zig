@@ -484,7 +484,7 @@ test "string escaping" {
 }
 
 fn expectWrite(expected: []const u8, input: []const u8, pretty: bool) !void {
-    var document = try @import("document.zig").parseWith(std.testing.allocator, input, .{});
+    var document = try @import("document.zig").parse(std.testing.allocator, input, .{});
     defer document.deinit();
     const output = try document.toSlice(std.testing.allocator, .{ .pretty = pretty });
     defer std.testing.allocator.free(output);

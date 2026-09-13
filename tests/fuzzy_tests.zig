@@ -494,3 +494,180 @@ fn writeObject(smith: *std.testing.Smith, out: *std.ArrayList(u8), depth: u8) an
     }
     try out.append(std.testing.allocator, '}');
 }
+
+/// A fixed document with no duplicate members, so a JSON Pointer has exactly
+/// one answer and the reference resolver cannot disagree about ambiguity.
+const pointer_document = "{\"a\":[1,2,{\"b\":\"x\"}],\"\":{\"d\":[true,null]},\"a/b\":{\"~\":1,\"c\":2},\"0\":\"zero\",\"~1\":\"tilde-one\",\"n\":123,\"s\":\"str\"}";
+
+const pointer_corpus = [_][]const u8{
+    "",
+    "/",
+    "/a/0",
+    "/a/2/b",
+    "/a~1b",
+    "/~01",
+    "/0",
+    "/a/-",
+    "/a/01",
+    "/~2",
+    "/nope",
+    "relative",
+};
+
+const PointerFuzz = struct {
+    reference: std.json.Value,
+    document: jsonz.dom.Document,
+};
+
+test "JSON pointer fuzz" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const reference = try std.json.parseFromSliceLeaky(
+        std.json.Value,
+        arena.allocator(),
+        pointer_document,
+        .{},
+    );
+
+    var document = try jsonz.dom.parse(std.testing.allocator, pointer_document, .{});
+    defer document.deinit();
+
+    const context: PointerFuzz = .{ .reference = reference, .document = document };
+    try std.testing.fuzz(context, fuzzPointer, .{ .corpus = &pointer_corpus });
+}
+
+/// Resolves a generated pointer against both the DOM and an independent
+/// `std.json` reference, and requires the same verdict and the same kind.
+fn fuzzPointer(context: PointerFuzz, smith: *std.testing.Smith) !void {
+    var pointer: std.ArrayList(u8) = .empty;
+    defer pointer.deinit(std.testing.allocator);
+    try writePointer(smith, &pointer);
+
+    const expected = referencePointer(context.reference, pointer.items);
+    const actual = context.document.ptrGetSlice(pointer.items);
+
+    if (expected) |value| {
+        const view = actual catch |failure| {
+            std.debug.print("jsonz rejected valid pointer {s}: {s}\n", .{ pointer.items, @errorName(failure) });
+            return error.TestUnexpectedResult;
+        };
+        const expected_kind = referenceKind(value);
+        const actual_kind = documentKind(view.kind());
+        if (expected_kind != actual_kind) {
+            std.debug.print("pointer {s} kind mismatch: {s} != {s}\n", .{
+                pointer.items,
+                @tagName(actual_kind),
+                @tagName(expected_kind),
+            });
+            return error.TestUnexpectedResult;
+        }
+    } else if (actual) |view| {
+        std.debug.print("jsonz accepted pointer {s} -> {s}\n", .{ pointer.items, @tagName(view.kind()) });
+        return error.TestUnexpectedResult;
+    } else |_| {}
+}
+
+/// Builds a pointer-shaped string: an optional leading token run drawn from an
+/// alphabet full of `/`, `~`, digits, and signs, so escapes and indices both get
+/// exercised.
+fn writePointer(smith: *std.testing.Smith, out: *std.ArrayList(u8)) !void {
+    if (smith.value(bool)) return;
+
+    try out.append(std.testing.allocator, '/');
+    const tokens = smith.valueRangeAtMost(u8, 0, 4);
+    for (0..tokens) |token_index| {
+        if (token_index != 0) try out.append(std.testing.allocator, '/');
+        const length = smith.valueRangeAtMost(u8, 0, 6);
+        const alphabet = "ab~01/-9 ";
+        for (0..length) |_| {
+            try out.append(std.testing.allocator, alphabet[smith.valueRangeAtMost(u8, 0, alphabet.len - 1)]);
+        }
+    }
+}
+
+/// An RFC 6901 resolver written against `std.json`, independent of `jsonz.dom`.
+fn referencePointer(root: std.json.Value, pointer: []const u8) ?std.json.Value {
+    if (pointer.len == 0) return root;
+    if (pointer[0] != '/') return null;
+    if (!std.unicode.utf8ValidateSlice(pointer)) return null;
+
+    var current = root;
+    var rest: []const u8 = pointer[1..];
+    while (true) {
+        const end = std.mem.indexOfScalar(u8, rest, '/');
+        const token: []const u8 = if (end) |index| rest[0..index] else rest;
+        var buffer: [256]u8 = undefined;
+        const decoded = referenceDecode(token, &buffer) orelse return null;
+        current = switch (current) {
+            .object => |object| object.get(decoded) orelse return null,
+            .array => |array| blk: {
+                if (std.mem.eql(u8, decoded, "-")) return null;
+                const index = referenceIndex(decoded) orelse return null;
+                if (index >= array.items.len) return null;
+                break :blk array.items[index];
+            },
+            else => return null,
+        };
+        rest = if (end) |index| rest[index + 1 ..] else return current;
+    }
+}
+
+fn referenceDecode(token: []const u8, buffer: []u8) ?[]const u8 {
+    var length: usize = 0;
+    var index: usize = 0;
+    while (index < token.len) {
+        if (token[index] == '~') {
+            if (index + 1 >= token.len or length == buffer.len) return null;
+            buffer[length] = switch (token[index + 1]) {
+                '0' => '~',
+                '1' => '/',
+                else => return null,
+            };
+            length += 1;
+            index += 2;
+        } else {
+            if (length == buffer.len) return null;
+            buffer[length] = token[index];
+            length += 1;
+            index += 1;
+        }
+    }
+    return buffer[0..length];
+}
+
+fn referenceIndex(token: []const u8) ?usize {
+    if (token.len == 0) return null;
+    if (token[0] == '0') return if (token.len == 1) 0 else null;
+    if (token[0] < '1' or token[0] > '9') return null;
+    var value: usize = 0;
+    for (token) |byte| {
+        if (byte < '0' or byte > '9') return null;
+        value = std.math.mul(usize, value, 10) catch return null;
+        value = std.math.add(usize, value, byte - '0') catch return null;
+    }
+    return value;
+}
+
+const PointerKind = enum { null, bool, number, string, array, object };
+
+fn referenceKind(value: std.json.Value) PointerKind {
+    return switch (value) {
+        .null => .null,
+        .bool => .bool,
+        .integer, .float, .number_string => .number,
+        .string => .string,
+        .array => .array,
+        .object => .object,
+    };
+}
+
+fn documentKind(kind: jsonz.dom.Kind) PointerKind {
+    return switch (kind) {
+        .null => .null,
+        .bool => .bool,
+        .number => .number,
+        .string => .string,
+        .array => .array,
+        .object => .object,
+    };
+}

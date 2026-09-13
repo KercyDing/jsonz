@@ -15,7 +15,6 @@ const DocView = view_mod.DocView;
 pub const PointerError = view_mod.AccessError || error{
     InvalidPointer,
     InvalidArrayIndex,
-    AmbiguousMember,
     PointerTooLong,
 };
 
@@ -85,17 +84,16 @@ fn descendSegment(current: DocView, segment: Segment) PointerError!DocView {
     return current.getAt(index) orelse error.OutOfBounds;
 }
 
-/// Looks up one object member. A pointer that matches more than one member is
-/// ambiguous, as RFC 6901 requires.
+/// Looks up the first object member whose name matches the token. Duplicate
+/// member names resolve to the first one, like the native parsers.
 fn objectLookup(current: DocView, token: []const u8) PointerError!DocView {
-    var found: ?DocView = null;
+    const escaped = std.mem.indexOfScalar(u8, token, '~') != null;
     var iterator = current.objectIterator() catch unreachable;
     while (iterator.next()) |entry| {
-        if (!tokenEql(entry.key, token)) continue;
-        if (found != null) return error.AmbiguousMember;
-        found = entry.value;
+        const matches = if (escaped) tokenEql(entry.key, token) else std.mem.eql(u8, entry.key, token);
+        if (matches) return entry.value;
     }
-    return found orelse error.MissingField;
+    return error.MissingField;
 }
 
 /// Compares a stored key with a pointer token, decoding `~0` and `~1` as it

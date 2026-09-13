@@ -221,8 +221,8 @@ test "json pointer duplicate member" {
     var doc = try jsonz.dom.parse(testing.allocator, "{\"foo\":1,\"foo\":2}", .{});
     defer doc.deinit();
 
-    try testing.expectEqual(@as(u8, 1), try (try doc.field("foo")).toNumber(.u8));
-    try testing.expectError(error.AmbiguousMember, doc.ptrGet("/foo"));
+    // Duplicate member names resolve to the first match.
+    try testing.expectEqual(@as(u8, 1), try (try doc.ptrGet("/foo")).toNumber(.u8));
     try testing.expectError(error.MissingField, doc.ptrGet("/bar"));
 }
 

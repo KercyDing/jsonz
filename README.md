@@ -4,7 +4,7 @@ A tiny, high-performance JSON library for Zig.
 
 - `jsonz.typed` provides native Zig serialization and deserialization for known
   schemas.
-- `jsonz.dom` provides a native high-performance DOM for arbitrary JSON, with
+- `jsonz.dom` provides a native DOM for arbitrary JSON, with
   [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access.
 - `jsonz.diagnostic` reports the first JSON syntax error with its location.
 

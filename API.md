@@ -276,8 +276,7 @@ when a formatted pointer does not fit the buffer.
 A token is an object member or an array index depending on the node it meets, as
 [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) requires. `~1` decodes to
 `/`, `~0` to `~`, and object keys match by exact code point without Unicode
-normalization. A pointer that matches more than one object member is
-`error.AmbiguousMember`.
+normalization. Duplicate member names resolve to the first match.
 
 The RFC 6901 URI fragment representation (`#/user/id`) is not implemented;
 `ptrGetDyn` accepts the JSON string representation only.
@@ -353,7 +352,6 @@ so that stream decides; `toSlice` returns plain text.
 | --- | --- |
 | `InvalidPointer` | Malformed pointer, invalid escape, or invalid UTF-8. |
 | `InvalidArrayIndex` | A token that is not an RFC 6901 array index. |
-| `AmbiguousMember` | The pointer matches more than one object member. |
 | `PointerTooLong` | A `ptrGetFmt` result does not fit the stack buffer. |
 
 `typed.ParseError`:

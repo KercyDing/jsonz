@@ -1,7 +1,7 @@
 const std = @import("std");
 const float = @import("float");
 const pool_mod = @import("pool.zig");
-const value_mod = @import("value.zig");
+const value_mod = @import("view.zig");
 
 /// Options that control DOM serialization.
 pub const WriteOptions = struct {
@@ -117,7 +117,7 @@ const Buffer = struct {
 /// Serializes `value` to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(
     allocator: std.mem.Allocator,
-    value: value_mod.Value,
+    value: value_mod.DocView,
     options: WriteOptions,
 ) ![]u8 {
     var buffer: Buffer = .{ .allocator = allocator };
@@ -135,7 +135,7 @@ pub fn toSlice(
 /// Serializes `value` to `writer`.
 pub fn toWriter(
     writer: *std.Io.Writer,
-    value: value_mod.Value,
+    value: value_mod.DocView,
     options: WriteOptions,
 ) !void {
     // The document is buffered and flushed once, which keeps this on the same
@@ -151,7 +151,7 @@ pub fn toWriter(
 /// separators before each value instead of overwriting them afterwards.
 fn write(
     buffer: *Buffer,
-    value: value_mod.Value,
+    value: value_mod.DocView,
     options: WriteOptions,
     allocator: std.mem.Allocator,
 ) !void {

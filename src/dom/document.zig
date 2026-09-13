@@ -1,12 +1,10 @@
 const std = @import("std");
 const pool_mod = @import("pool.zig");
 const reader = @import("reader.zig");
-const value = @import("value.zig");
+const view = @import("view.zig");
 
-const Value = value.Value;
-const Array = value.Array;
-const Object = value.Object;
-const WriteOptions = value.WriteOptions;
+const DocView = view.DocView;
+const WriteOptions = view.WriteOptions;
 
 /// Options that control DOM parsing.
 pub const ParseOptions = reader.Options;
@@ -14,13 +12,13 @@ pub const ParseError = reader.Error;
 
 /// An owned DOM document. Call `deinit` once when finished.
 ///
-/// Values, arrays, objects, and string slices obtained from this document borrow
-/// its storage and become invalid after `deinit`.
+/// `DocView`s and string slices obtained from this document borrow its storage
+/// and become invalid after `deinit`.
 pub const Document = struct {
     /// Caller-provided storage when `parseInto` was used; otherwise the input
     /// buffer and the value pool are owned by `pool.allocator`.
     pool: pool_mod.Pool,
-    storage: value.Storage,
+    storage: view.Storage,
     root_index: u32,
 
     /// Releases the DOM storage and invalidates this document and all of its views.
@@ -33,12 +31,12 @@ pub const Document = struct {
     }
 
     /// Returns a view of the document's root value.
-    pub fn root(self: *const Document) Value {
+    pub fn root(self: *const Document) DocView {
         return .{ .storage = &self.storage, .index = self.root_index };
     }
 
     /// Returns the kind of the root value.
-    pub fn kind(self: *const Document) value.Kind {
+    pub fn kind(self: *const Document) view.Kind {
         return self.root().kind();
     }
 
@@ -52,19 +50,9 @@ pub const Document = struct {
         return self.root().isBool();
     }
 
-    /// Returns whether the root value is a signed integer.
-    pub fn isInt(self: *const Document) bool {
-        return self.root().isInt();
-    }
-
-    /// Returns whether the root value is an unsigned integer.
-    pub fn isUint(self: *const Document) bool {
-        return self.root().isUint();
-    }
-
-    /// Returns whether the root value is a floating-point number.
-    pub fn isFloat(self: *const Document) bool {
-        return self.root().isFloat();
+    /// Returns whether the root value can be converted to the requested numeric type.
+    pub fn isNumber(self: *const Document, comptime target: view.NumberType) bool {
+        return self.root().isNumber(target);
     }
 
     /// Returns whether the root value is a string.
@@ -82,18 +70,23 @@ pub const Document = struct {
         return self.root().isObject();
     }
 
+    /// Returns the number of fields or elements in the root container.
+    pub fn len(self: *const Document) view.AccessError!usize {
+        return self.root().len();
+    }
+
     /// Returns the root boolean.
-    pub fn toBool(self: *const Document) value.ValueError!bool {
+    pub fn toBool(self: *const Document) view.AccessError!bool {
         return self.root().toBool();
     }
 
     /// Converts the root JSON number to the requested numeric type.
-    pub fn toNumber(self: *const Document, comptime target: value.NumberType) value.ValueError!target.Type() {
+    pub fn toNumber(self: *const Document, comptime target: view.NumberType) view.AccessError!target.Type() {
         return self.root().toNumber(target);
     }
 
     /// Converts the root JSON number to the requested numeric type, or null.
-    pub fn asNumber(self: *const Document, comptime target: value.NumberType) ?target.Type() {
+    pub fn asNumber(self: *const Document, comptime target: view.NumberType) ?target.Type() {
         return self.root().asNumber(target);
     }
 
@@ -107,45 +100,40 @@ pub const Document = struct {
         return self.root().asString();
     }
 
-    /// Returns the root array when it is an array, otherwise null.
-    pub fn asArray(self: *const Document) ?Array {
-        return self.root().asArray();
-    }
-
-    /// Returns the root object when it is an object, otherwise null.
-    pub fn asObject(self: *const Document) ?Object {
-        return self.root().asObject();
-    }
-
     /// Returns a string slice borrowed from the document.
-    pub fn toString(self: *const Document) value.ValueError![]const u8 {
+    pub fn toString(self: *const Document) view.AccessError![]const u8 {
         return self.root().toString();
-    }
-
-    /// Returns an array view borrowed from the document.
-    pub fn toArray(self: *const Document) value.ValueError!Array {
-        return self.root().toArray();
-    }
-
-    /// Returns an object view borrowed from the document.
-    pub fn toObject(self: *const Document) value.ValueError!Object {
-        return self.root().toObject();
     }
 
     /// Looks up a root-object field, returning `null` when the root is not an
     /// object or the field is absent.
-    pub fn get(self: *const Document, key: []const u8) ?Value {
+    pub fn get(self: *const Document, key: []const u8) ?DocView {
         return self.root().get(key);
     }
 
     /// Returns a root-object field, or an error when it cannot be accessed.
-    pub fn field(self: *const Document, key: []const u8) value.ValueError!Value {
+    pub fn field(self: *const Document, key: []const u8) view.AccessError!DocView {
         return self.root().field(key);
     }
 
-    /// Traverses a comptime-known sequence of root-object fields without allocating.
-    pub fn fieldPath(self: *const Document, comptime fields: anytype) value.FieldPath {
-        return self.root().fieldPath(fields);
+    /// Returns an array element, or `null` when the root is not an array or the index is out of bounds.
+    pub fn getAt(self: *const Document, index: usize) ?DocView {
+        return self.root().getAt(index);
+    }
+
+    /// Returns an array element, or an error when the root is not an array or the index is out of bounds.
+    pub fn at(self: *const Document, index: usize) view.AccessError!DocView {
+        return self.root().at(index);
+    }
+
+    /// Returns an iterator over root object fields.
+    pub fn objectIterator(self: *const Document) view.AccessError!DocView.ObjectIterator {
+        return self.root().objectIterator();
+    }
+
+    /// Returns an iterator over root array elements.
+    pub fn arrayIterator(self: *const Document) view.AccessError!DocView.ArrayIterator {
+        return self.root().arrayIterator();
     }
 
     /// Serializes the root value to a newly allocated JSON byte slice owned by `allocator`.

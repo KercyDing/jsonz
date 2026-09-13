@@ -91,14 +91,17 @@ const input =
 var document = try jsonz.dom.parse(allocator, input, .{});
 defer document.deinit();
 
-const name = try (try document.field("name")).toString();
-const tags = try (try document.field("tags")).toArray();
-const first_tag = try (try tags.at(0)).toString();
+const name_view = try document.field("name");
+const name = try name_view.toString();
+
+const tags = try document.field("tags");
+const first_tag_view = try tags.at(0);
+const first_tag = try first_tag_view.toString();
 
 std.debug.print("{s}: {s}\n", .{ name, first_tag });
 ```
 
-Use `Object.get` or `Array.get` when a field or array element may be absent:
+Use `get` or `getAt` when a field or array element may be absent:
 
 ```zig
 if (document.get("name")) |name| {
@@ -108,10 +111,13 @@ if (document.get("name")) |name| {
 }
 ```
 
-`get` returns `null` when the container type does not match or the element is
-missing. `field` and `at` return an error when the container type is wrong or
-the requested element does not exist.
+`get` and `getAt` return `null` when the container type does not match or the
+element is missing. `field` and `at` return an error when the container type is
+wrong or the requested element does not exist.
 `isString`, `isArray`, and other `isXxx` methods check the runtime JSON type.
+
+A `DocView` is the only node type: object and array operations live on it
+directly, so a lookup never needs an intermediate view.
 
 ### Diagnosing invalid JSON
 
@@ -190,38 +196,36 @@ exe.root_module.link_libc = true;
 const allocator = std.heap.c_allocator;
 ```
 
-A `Document` owns its parsed storage. `Value` instances and returned strings borrow that storage and must not outlive the document.
+A `Document` owns its parsed storage. `DocView` instances and returned strings borrow that storage and must not outlive the document.
 
-Object access:
-
-```zig
-object.get("name")    // ?Value
-try object.field("name")  // Value
-```
-
-Array access:
+Object access through `DocView`:
 
 ```zig
-array.get(0)          // ?Value
-try array.at(0)       // Value
+view.get("name")        // ?DocView
+try view.field("name")  // DocView
 ```
 
-Nested object access:
+Array access through `DocView`:
 
 ```zig
-const id = try document
-    .fieldPath(.{ "user", "profile", "id" })
-    .toNumber(.u64);
-
-const name = document
-    .fieldPath(.{ "user", "profile", "name" })
-    .asString();
+view.getAt(0)        // ?DocView
+try view.at(0)       // DocView
 ```
 
-`fieldPath` accepts a comptime-known sequence of object fields and is expanded
-inline without allocating. `toXxx` reports the first path failure as an error;
-`asXxx` returns `null`. Use `failure()` when diagnostics need the failed field,
-its path index, and the encountered JSON kind.
+Container iteration through `DocView`:
+
+```zig
+var fields = try view.objectIterator();
+while (fields.next()) |entry| {
+    entry.key;
+    entry.value;
+}
+
+var elements = try view.arrayIterator();
+while (elements.next()) |element| {
+    _ = element;
+}
+```
 
 `isXxx` type checks:
 
@@ -229,9 +233,7 @@ its path index, and the encountered JSON kind.
 | --- | --- |
 | `isNull()` | `bool` |
 | `isBool()` | `bool` |
-| `isInt()` | `bool` |
-| `isUint()` | `bool` |
-| `isFloat()` | `bool` |
+| `isNumber(.xxx)` | `bool` |
 | `isString()` | `bool` |
 | `isArray()` | `bool` |
 | `isObject()` | `bool` |
@@ -240,11 +242,9 @@ its path index, and the encountered JSON kind.
 
 | Method | Returns | Failure |
 | --- | --- | --- |
-| `toBool()` | `ValueError!bool` | not a boolean |
-| `toNumber(.xxx)` | `ValueError!T` | not numeric or out of range |
-| `toString()` | `ValueError![]const u8` | not a string |
-| `toArray()` | `ValueError!Array` | not an array |
-| `toObject()` | `ValueError!Object` | not an object |
+| `toBool()` | `AccessError!bool` | not a boolean |
+| `toNumber(.xxx)` | `AccessError!T` | not numeric or out of range |
+| `toString()` | `AccessError![]const u8` | not a string |
 
 `asXxx` optional access:
 
@@ -253,12 +253,10 @@ its path index, and the encountered JSON kind.
 | `asNumber(.xxx)` | `?T` | not numeric or out of range |
 | `asBool()` | `?bool` | not a boolean |
 | `asString()` | `?[]const u8` | not a string |
-| `asArray()` | `?Array` | not an array |
-| `asObject()` | `?Object` | not an object |
 
 Integer-to-floating-point conversion may lose precision.
 
-Both `Document` and `Value` provide `.toSlice()` and `.toWriter()`.
+Both `Document` and `DocView` provide `.toSlice()` and `.toWriter()`.
 
 For caller-provided storage:
 

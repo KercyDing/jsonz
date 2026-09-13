@@ -23,65 +23,29 @@ test "value access" {
     try testing.expectEqual(@as(u64, 42), try (try document.field("count")).toNumber(.u64));
     try testing.expect(document.get("missing") == null);
 
-    const items = try (try document.field("items")).toArray();
+    const items = try document.field("items");
     try testing.expect((try items.at(0)).isNull());
     try testing.expectEqualStrings("jsonz", try (try items.at(1)).toString());
     try testing.expectEqual(@as(i64, -7), try (try items.at(2)).toNumber(.i64));
     try testing.expectEqual(@as(f64, 1.5), try (try items.at(3)).toNumber(.f64));
-    try testing.expect(items.get(4) == null);
-}
-
-test "field path" {
-    var document = try dom.parse(
-        testing.allocator,
-        "{\"user\":{\"profile\":{\"id\":7,\"name\":\"jsonz\"}}}",
-        .{},
-    );
-    defer document.deinit();
-
-    const id = document.fieldPath(.{ "user", "profile", "id" });
-    try testing.expectEqual(@as(u8, 7), try id.toNumber(.u8));
-    try testing.expect(id.failure() == null);
-
-    const name = document.fieldPath(.{ "user", "profile", "name" });
-    try testing.expectEqualStrings("jsonz", name.asString().?);
-
-    const missing = document.fieldPath(.{ "user", "profile", "email" });
-    try testing.expectError(error.MissingField, missing.toString());
-    const missing_failure = missing.failure().?;
-    try testing.expectEqual(@as(usize, 2), missing_failure.index);
-    try testing.expectEqualStrings("email", missing_failure.field);
-    try testing.expectEqual(dom.FieldPath.Reason.missing_field, missing_failure.reason);
-    try testing.expect(missing_failure.found == null);
-
-    var non_object_document = try dom.parse(testing.allocator, "{\"user\":[]}", .{});
-    defer non_object_document.deinit();
-    const non_object = non_object_document.fieldPath(.{ "user", "name" });
-    try testing.expectError(error.UnexpectedType, non_object.toString());
-    const type_failure = non_object.failure().?;
-    try testing.expectEqual(@as(usize, 1), type_failure.index);
-    try testing.expectEqualStrings("name", type_failure.field);
-    try testing.expectEqual(dom.FieldPath.Reason.expected_object, type_failure.reason);
-    try testing.expectEqual(@as(?dom.Kind, .array), type_failure.found);
-
-    try testing.expect((try document.fieldPath(.{}).toObject()).get("user") != null);
+    try testing.expect(items.getAt(4) == null);
 }
 
 test "container iteration" {
     var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2}", .{});
     defer document.deinit();
 
-    var iterator = (try document.toObject()).iterator();
+    var iterator = try document.objectIterator();
     var count: usize = 0;
     while (iterator.next()) |entry| {
-        try testing.expect(entry.value.isUint());
+        try testing.expect(entry.value.isNumber(.u64));
         try testing.expect(entry.key.len == 1);
         count += 1;
     }
     try testing.expectEqual(@as(usize, 2), count);
 
-    var elements = (try document.toObject()).get("a").?.kind();
-    try testing.expectEqual(dom.Kind.uint, elements);
+    var elements = document.get("a").?.kind();
+    try testing.expectEqual(dom.Kind.number, elements);
     elements = document.root().kind();
     try testing.expectEqual(dom.Kind.object, elements);
 }
@@ -99,21 +63,20 @@ test "access past a container child" {
     defer document.deinit();
 
     try testing.expectEqual(@as(u64, 5), try (try document.field("d")).toNumber(.u64));
-    const b_array = try (try (try document.field("b")).toObject()).field("c");
-    const b_values = try b_array.toArray();
+    const b_values = try (try document.field("b")).field("c");
     try testing.expectEqual(@as(u64, 3), try (try b_values.at(0)).toNumber(.u64));
     try testing.expectEqual(@as(u64, 4), try (try b_values.at(1)).toNumber(.u64));
-    const empty = try (try document.field("e")).toArray();
-    try testing.expectEqual(@as(usize, 0), empty.len());
-    const f_array = try (try document.field("f")).toArray();
-    const nested = try (try f_array.at(1)).toArray();
+    const empty = try document.field("e");
+    try testing.expectEqual(@as(usize, 0), try empty.len());
+    const f_array = try document.field("f");
+    const nested = try f_array.at(1);
     try testing.expectEqual(@as(u64, 7), try (try nested.at(0)).toNumber(.u64));
     try testing.expectEqual(@as(u64, 8), try (try nested.at(1)).toNumber(.u64));
     try testing.expect(document.get("missing") == null);
 
     // "c" belongs to "b", so the top level has five fields.
     const keys = [_][]const u8{ "a", "b", "d", "e", "f" };
-    var fields = (try document.toObject()).iterator();
+    var fields = try document.objectIterator();
     var field_index: usize = 0;
     while (fields.next()) |entry| : (field_index += 1) {
         try testing.expectEqualStrings(keys[field_index], entry.key);
@@ -123,22 +86,22 @@ test "access past a container child" {
     var list = try dom.parse(testing.allocator, "[[1],[2,[3]],4,[],5]", .{});
     defer list.deinit();
 
-    const array = try list.toArray();
-    try testing.expectEqual(@as(usize, 5), array.len());
-    const first_nested = try (try array.at(0)).toArray();
+    const array = list;
+    try testing.expectEqual(@as(usize, 5), try array.len());
+    const first_nested = try array.at(0);
     try testing.expectEqual(@as(u64, 1), try (try first_nested.at(0)).toNumber(.u64));
-    const nested_array = try (try array.at(1)).toArray();
-    const deeply_nested = try (try nested_array.at(1)).toArray();
+    const nested_array = try array.at(1);
+    const deeply_nested = try nested_array.at(1);
     try testing.expectEqual(@as(u64, 3), try (try deeply_nested.at(0)).toNumber(.u64));
     try testing.expectEqual(@as(u64, 4), try (try array.at(2)).toNumber(.u64));
-    try testing.expectEqual(@as(usize, 0), (try (try array.at(3)).toArray()).len());
+    try testing.expectEqual(@as(usize, 0), try (try array.at(3)).len());
     try testing.expectEqual(@as(u64, 5), try (try array.at(4)).toNumber(.u64));
-    try testing.expect(array.get(5) == null);
+    try testing.expect(array.getAt(5) == null);
 
-    var elements = array.iterator();
+    var elements = try array.arrayIterator();
     var element_index: usize = 0;
     while (elements.next()) |element| : (element_index += 1) {
-        if (element_index == 2) try testing.expect(element.isUint());
+        if (element_index == 2) try testing.expect(element.isNumber(.u64));
     }
     try testing.expectEqual(@as(usize, 5), element_index);
 }

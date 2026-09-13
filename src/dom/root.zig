@@ -1,38 +1,26 @@
 const document = @import("document.zig");
-const value = @import("value.zig");
+const view = @import("view.zig");
 const pool = @import("pool.zig");
 const reader = @import("reader.zig");
 const writer = @import("writer.zig");
 
 /// An owned parsed DOM document.
 pub const Document = document.Document;
-/// A borrowed DOM value view.
-pub const Value = value.Value;
+/// A borrowed view of any node in an owned document.
+pub const DocView = view.DocView;
 /// The kind of a DOM value.
-pub const Kind = value.Kind;
-/// Errors returned when a DOM value cannot be read as the requested type.
-pub const ValueError = value.ValueError;
-/// Numeric target types accepted by `Value.asNumber`.
-pub const NumberType = value.NumberType;
-/// The result of a nested `fieldPath` lookup.
-pub const FieldPath = value.FieldPath;
-/// A borrowed DOM object view.
-pub const Object = value.Object;
-/// A borrowed key/value pair from a DOM object.
-pub const ObjectEntry = value.ObjectEntry;
-/// Iterator over DOM object fields.
-pub const ObjectIterator = value.ObjectIterator;
-/// A borrowed DOM array view.
-pub const Array = value.Array;
-/// Iterator over DOM array values.
-pub const ArrayIterator = value.ArrayIterator;
+pub const Kind = view.Kind;
+/// Errors returned when a node cannot be accessed or converted.
+pub const AccessError = view.AccessError;
+/// Numeric target types accepted by `DocView.toNumber` and `DocView.asNumber`.
+pub const NumberType = view.NumberType;
 
 /// Options that control DOM parsing.
 pub const ParseOptions = document.ParseOptions;
 /// Errors returned by DOM parsing.
 pub const ParseError = document.ParseError;
 /// Options that control DOM serialization.
-pub const WriteOptions = value.WriteOptions;
+pub const WriteOptions = view.WriteOptions;
 
 /// Parses JSON into an owned DOM document.
 pub const parse = document.parse;
@@ -42,13 +30,13 @@ pub const parseInto = document.parseInto;
 pub const parseBufferSize = document.parseBufferSize;
 
 /// Serializes a DOM value to an allocated JSON slice.
-pub const toSlice = value.toSlice;
+pub const toSlice = view.toSlice;
 /// Serializes a DOM value directly to an IO writer.
-pub const toWriter = value.toWriter;
+pub const toWriter = view.toWriter;
 
 test {
     _ = document;
-    _ = value;
+    _ = view;
     _ = pool;
     _ = reader;
     _ = writer;

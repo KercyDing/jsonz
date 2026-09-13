@@ -10,6 +10,10 @@ pub const Document = document.Document;
 pub const Value = value.Value;
 /// The kind of a DOM value.
 pub const Kind = value.Kind;
+/// Errors returned when a DOM value cannot be read as the requested type.
+pub const ValueError = value.ValueError;
+/// Numeric target types accepted by `Value.asNumber`.
+pub const NumberType = value.NumberType;
 /// A borrowed DOM object view.
 pub const Object = value.Object;
 /// A borrowed key/value pair from a DOM object.

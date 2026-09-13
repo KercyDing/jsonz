@@ -82,49 +82,64 @@ pub const Document = struct {
         return self.root().isObject();
     }
 
-    /// Returns the root boolean. Asserts that `isBool()` is true.
-    pub fn @"bool"(self: *const Document) bool {
-        return self.root().bool();
+    /// Returns the root boolean.
+    pub fn toBool(self: *const Document) value.ValueError!bool {
+        return self.root().toBool();
     }
 
-    /// Returns the root signed integer. Asserts that `isInt()` is true.
-    pub fn int(self: *const Document) i64 {
-        return self.root().int();
+    /// Converts the root JSON number to the requested numeric type.
+    pub fn toNumber(self: *const Document, comptime target: value.NumberType) value.ValueError!target.Type() {
+        return self.root().toNumber(target);
     }
 
-    /// Returns the root unsigned integer. Asserts that `isUint()` is true.
-    pub fn uint(self: *const Document) u64 {
-        return self.root().uint();
+    /// Converts the root JSON number to the requested numeric type, or null.
+    pub fn asNumber(self: *const Document, comptime target: value.NumberType) ?target.Type() {
+        return self.root().asNumber(target);
     }
 
-    /// Returns the root floating-point value. Asserts that `isFloat()` is true.
-    pub fn float(self: *const Document) f64 {
-        return self.root().float();
+    /// Returns the root boolean when it is a boolean, otherwise null.
+    pub fn asBool(self: *const Document) ?bool {
+        return self.root().asBool();
     }
 
-    /// Returns a string slice borrowed from the document. Asserts that `isString()` is true.
-    pub fn string(self: *const Document) []const u8 {
-        return self.root().string();
+    /// Returns the root string when it is a string, otherwise null.
+    pub fn asString(self: *const Document) ?[]const u8 {
+        return self.root().asString();
     }
 
-    /// Returns an array view borrowed from the document. Asserts that `isArray()` is true.
-    pub fn array(self: *const Document) Array {
-        return self.root().array();
+    /// Returns the root array when it is an array, otherwise null.
+    pub fn asArray(self: *const Document) ?Array {
+        return self.root().asArray();
     }
 
-    /// Returns an object view borrowed from the document. Asserts that `isObject()` is true.
-    pub fn object(self: *const Document) Object {
-        return self.root().object();
+    /// Returns the root object when it is an object, otherwise null.
+    pub fn asObject(self: *const Document) ?Object {
+        return self.root().asObject();
     }
 
-    /// Looks up a root-object field, returning `null` when the field is absent.
-    /// Asserts that the root is an object.
+    /// Returns a string slice borrowed from the document.
+    pub fn toString(self: *const Document) value.ValueError![]const u8 {
+        return self.root().toString();
+    }
+
+    /// Returns an array view borrowed from the document.
+    pub fn toArray(self: *const Document) value.ValueError!Array {
+        return self.root().toArray();
+    }
+
+    /// Returns an object view borrowed from the document.
+    pub fn toObject(self: *const Document) value.ValueError!Object {
+        return self.root().toObject();
+    }
+
+    /// Looks up a root-object field, returning `null` when the root is not an
+    /// object or the field is absent.
     pub fn get(self: *const Document, key: []const u8) ?Value {
         return self.root().get(key);
     }
 
-    /// Returns a root-object field. Asserts that the root is an object and the field exists.
-    pub fn field(self: *const Document, key: []const u8) Value {
+    /// Returns a root-object field, or an error when it cannot be accessed.
+    pub fn field(self: *const Document, key: []const u8) value.ValueError!Value {
         return self.root().field(key);
     }
 
@@ -243,7 +258,7 @@ test "caller storage" {
     var document = try parseInto(storage, input, .{});
     defer document.deinit();
 
-    try std.testing.expectEqualStrings("jsonz", document.field("name").string());
+    try std.testing.expectEqualStrings("jsonz", try (try document.field("name")).toString());
 
     var insufficient: [1]u8 = undefined;
     try std.testing.expectError(
@@ -263,14 +278,14 @@ test "parse options" {
         .allow_trailing_commas = true,
     });
     defer document.deinit();
-    try std.testing.expectEqual(@as(u64, 1), document.field("value").uint());
+    try std.testing.expectEqual(@as(u64, 1), try (try document.field("value")).toNumber(.u64));
 }
 
 test "escaped keys are matched by content" {
     var document = try parse(std.testing.allocator, "{\"\\u0061\\u0062\":1,\"a\":2}", .{});
     defer document.deinit();
-    try std.testing.expectEqual(@as(u64, 1), document.field("ab").uint());
-    try std.testing.expectEqual(@as(u64, 2), document.field("a").uint());
+    try std.testing.expectEqual(@as(u64, 1), try (try document.field("ab")).toNumber(.u64));
+    try std.testing.expectEqual(@as(u64, 2), try (try document.field("a")).toNumber(.u64));
 }
 
 test "invalid input" {

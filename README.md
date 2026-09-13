@@ -119,7 +119,15 @@ const other_view = try document.ptrGetSlice(pointer_from_user);
 reason. It reads raw bytes, so it needs no parser, allocator, or schema:
 
 ```zig
-try jsonz.diagnostic.print(input, .{ .source_name = "config.json" });
+const broken =
+    \\{
+    \\  "name": "jsonz",
+    \\  "tags": ["zig" "json"],
+    \\  "count": 3
+    \\}
+;
+
+try jsonz.diagnostic.print(broken, .{ .source_name = "config.json" });
 ```
 
 ```console

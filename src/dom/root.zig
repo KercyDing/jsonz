@@ -9,7 +9,7 @@ const rfc = @import("rfc.zig");
 pub const Document = document.Document;
 /// A borrowed view of any node in an owned document.
 pub const DocView = view.DocView;
-/// The kind of a DOM value.
+/// The kind of a DOM node.
 pub const Kind = view.Kind;
 /// Errors returned when a node cannot be accessed or converted.
 pub const AccessError = view.AccessError;
@@ -32,9 +32,9 @@ pub const parseInto = document.parseInto;
 /// Returns the required storage size for `parseInto`.
 pub const parseBufferSize = document.parseBufferSize;
 
-/// Serializes a DOM value to an allocated JSON slice.
+/// Serializes a DOM node to an allocated JSON slice.
 pub const toSlice = view.toSlice;
-/// Serializes a DOM value directly to an IO writer.
+/// Serializes a DOM node directly to an IO writer.
 pub const toWriter = view.toWriter;
 
 test {

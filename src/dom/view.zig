@@ -3,7 +3,7 @@ const pool_mod = @import("pool.zig");
 const writer_mod = @import("writer.zig");
 const rfc = @import("rfc.zig");
 
-/// The JSON kind represented by a DOM value.
+/// The JSON kind represented by a DOM node.
 pub const Kind = enum {
     null,
     bool,
@@ -69,14 +69,14 @@ pub const NumberType = enum {
 /// The parsed storage behind every `DocView`.
 ///
 /// `input` is the (owned or caller-provided) JSON buffer whose escape
-/// sequences were decoded in place; `values` is the value pool. Both slices are
+/// sequences were decoded in place; `nodes` is the node pool. Both slices are
 /// borrowed from the owning `Document` and are only valid while it lives.
 pub const Storage = struct {
-    values: []const pool_mod.Value,
+    nodes: []const pool_mod.Node,
     input: []const u8,
 };
 
-/// A borrowed view of one DOM value; it does not own memory.
+/// A borrowed view of one DOM node; it does not own memory.
 pub const DocView = struct {
     storage: *const Storage,
     index: u32,
@@ -100,11 +100,11 @@ pub const DocView = struct {
             if (self.remaining == 0) return null;
             self.remaining -= 1;
             const key = self.cursor;
-            const value_index = key + 1;
-            self.cursor = value_index + subtreeLength(self.storage, value_index);
+            const node_index = key + 1;
+            self.cursor = node_index + subtreeLength(self.storage, node_index);
             return .{
-                .key = stringAt(self.storage, &self.storage.values[key]),
-                .value = .{ .storage = self.storage, .index = value_index },
+                .key = stringAt(self.storage, &self.storage.nodes[key]),
+                .value = .{ .storage = self.storage, .index = node_index },
             };
         }
     };
@@ -126,14 +126,14 @@ pub const DocView = struct {
         }
     };
 
-    fn raw(self: DocView) *const pool_mod.Value {
-        return &self.storage.values[self.index];
+    fn raw(self: DocView) *const pool_mod.Node {
+        return &self.storage.nodes[self.index];
     }
 
-    /// Returns this value's JSON kind.
+    /// Returns this node's JSON kind.
     pub fn kind(self: DocView) Kind {
-        const value = self.raw();
-        return switch (pool_mod.valueType(value.*)) {
+        const node = self.raw();
+        return switch (pool_mod.nodeType(node.*)) {
             .null => .null,
             .bool => .bool,
             .number => .number,
@@ -144,58 +144,58 @@ pub const DocView = struct {
         };
     }
 
-    /// Returns whether this value is JSON `null`.
+    /// Returns whether this node is JSON `null`.
     pub fn isNull(self: DocView) bool {
-        return pool_mod.valueType(self.raw().*) == .null;
+        return pool_mod.nodeType(self.raw().*) == .null;
     }
 
-    /// Returns whether this value is a boolean.
+    /// Returns whether this node is a boolean.
     pub fn isBool(self: DocView) bool {
-        return pool_mod.valueType(self.raw().*) == .bool;
+        return pool_mod.nodeType(self.raw().*) == .bool;
     }
 
-    /// Returns whether this value can be converted to the requested numeric type.
+    /// Returns whether this node can be converted to the requested numeric type.
     pub fn isNumber(self: DocView, comptime target: NumberType) bool {
         _ = self.toNumber(target) catch return false;
         return true;
     }
 
-    /// Returns whether this value is a string.
+    /// Returns whether this node is a string.
     pub fn isString(self: DocView) bool {
-        return pool_mod.valueType(self.raw().*) == .string;
+        return pool_mod.nodeType(self.raw().*) == .string;
     }
 
-    /// Returns whether this value is an array.
+    /// Returns whether this node is an array.
     pub fn isArray(self: DocView) bool {
-        return pool_mod.valueType(self.raw().*) == .array;
+        return pool_mod.nodeType(self.raw().*) == .array;
     }
 
-    /// Returns whether this value is an object.
+    /// Returns whether this node is an object.
     pub fn isObject(self: DocView) bool {
-        return pool_mod.valueType(self.raw().*) == .object;
+        return pool_mod.nodeType(self.raw().*) == .object;
     }
 
-    /// Returns the boolean value.
+    /// Returns the boolean payload.
     pub fn toBool(self: DocView) AccessError!bool {
         if (!self.isBool()) return error.UnexpectedType;
-        return pool_mod.valueSubtype(self.raw().*) == pool_mod.true_value;
+        return pool_mod.nodeSubtype(self.raw().*) == pool_mod.true_flag;
     }
 
     /// Converts this JSON number to the requested numeric type.
     pub fn toNumber(self: DocView, comptime target: NumberType) AccessError!target.Type() {
-        if (pool_mod.valueType(self.raw().*) != .number) return error.UnexpectedType;
+        if (pool_mod.nodeType(self.raw().*) != .number) return error.UnexpectedType;
         return switch (target) {
-            .i8, .i16, .i32, .i64, .i128, .isize => switch (pool_mod.valueSubtype(self.raw().*)) {
+            .i8, .i16, .i32, .i64, .i128, .isize => switch (pool_mod.nodeSubtype(self.raw().*)) {
                 .one => std.math.cast(target.Type(), self.raw().payload.int) orelse error.OutOfRange,
                 .none => std.math.cast(target.Type(), self.raw().payload.uint) orelse error.OutOfRange,
                 else => error.UnexpectedType,
             },
-            .u8, .u16, .u32, .u64, .u128, .usize => switch (pool_mod.valueSubtype(self.raw().*)) {
+            .u8, .u16, .u32, .u64, .u128, .usize => switch (pool_mod.nodeSubtype(self.raw().*)) {
                 .none => std.math.cast(target.Type(), self.raw().payload.uint) orelse error.OutOfRange,
                 .one => std.math.cast(target.Type(), self.raw().payload.int) orelse error.OutOfRange,
                 else => error.UnexpectedType,
             },
-            .f16, .f32, .f64 => switch (pool_mod.valueSubtype(self.raw().*)) {
+            .f16, .f32, .f64 => switch (pool_mod.nodeSubtype(self.raw().*)) {
                 .real => @floatCast(self.raw().payload.float),
                 .one => @floatFromInt(self.raw().payload.int),
                 .none => @floatFromInt(self.raw().payload.uint),
@@ -209,18 +209,18 @@ pub const DocView = struct {
         return stringAt(self.storage, self.raw());
     }
 
-    /// Converts this value to the requested numeric type, or returns `null`
+    /// Converts this node to the requested numeric type, or returns `null`
     /// when it is not numeric or does not fit.
     pub fn asNumber(self: DocView, comptime target: NumberType) ?target.Type() {
         return self.toNumber(target) catch null;
     }
 
-    /// Returns the boolean value when this value is a boolean, otherwise null.
+    /// Returns the boolean payload when this node is a boolean, otherwise null.
     pub fn asBool(self: DocView) ?bool {
         return self.toBool() catch null;
     }
 
-    /// Returns the borrowed string when this value is a string, otherwise null.
+    /// Returns the borrowed string when this node is a string, otherwise null.
     pub fn asString(self: DocView) ?[]const u8 {
         return self.toString() catch null;
     }
@@ -228,31 +228,31 @@ pub const DocView = struct {
     /// Returns the number of fields or elements in this container.
     pub fn len(self: DocView) AccessError!usize {
         if (!self.isArray() and !self.isObject()) return error.UnexpectedType;
-        return pool_mod.valueLen(self.raw().*);
+        return pool_mod.nodeLen(self.raw().*);
     }
 
-    /// Looks up an object field, returning `null` when this value is not an
+    /// Looks up an object field, returning `null` when this node is not an
     /// object or the field is absent.
     pub fn get(self: DocView, key: []const u8) ?DocView {
         if (!self.isObject()) return null;
         return getObjectUnchecked(self, key);
     }
 
-    /// Returns an object field, or an error when this value is not an object or
+    /// Returns an object field, or an error when this node is not an object or
     /// the field does not exist.
     pub fn field(self: DocView, key: []const u8) AccessError!DocView {
         if (!self.isObject()) return error.UnexpectedType;
         return getObjectUnchecked(self, key) orelse error.MissingField;
     }
 
-    /// Returns an array element, or `null` when this value is not an array or
+    /// Returns an array element, or `null` when this node is not an array or
     /// the index is out of bounds.
     pub fn getAt(self: DocView, index: usize) ?DocView {
         if (!self.isArray()) return null;
         return getArrayUnchecked(self, index);
     }
 
-    /// Returns an array element, or an error when this value is not an array or
+    /// Returns an array element, or an error when this node is not an array or
     /// the index is out of bounds.
     pub fn at(self: DocView, index: usize) AccessError!DocView {
         if (!self.isArray()) return error.UnexpectedType;
@@ -264,7 +264,7 @@ pub const DocView = struct {
         if (!self.isObject()) return error.UnexpectedType;
         return .{
             .storage = self.storage,
-            .remaining = pool_mod.valueLen(self.raw().*),
+            .remaining = pool_mod.nodeLen(self.raw().*),
             .cursor = self.index + 1,
         };
     }
@@ -274,7 +274,7 @@ pub const DocView = struct {
         if (!self.isArray()) return error.UnexpectedType;
         return .{
             .storage = self.storage,
-            .remaining = pool_mod.valueLen(self.raw().*),
+            .remaining = pool_mod.nodeLen(self.raw().*),
             .cursor = self.index + 1,
         };
     }
@@ -295,7 +295,7 @@ pub const DocView = struct {
         return rfc.resolve(self, ptr);
     }
 
-    /// Serializes this value to a newly allocated JSON byte slice owned by `allocator`.
+    /// Serializes this node to a newly allocated JSON byte slice owned by `allocator`.
     pub fn toSlice(
         self: DocView,
         allocator: std.mem.Allocator,
@@ -304,7 +304,7 @@ pub const DocView = struct {
         return writer_mod.toSlice(allocator, self, options);
     }
 
-    /// Serializes this value to `writer` without allocating an output slice.
+    /// Serializes this node to `writer` without allocating an output slice.
     pub fn toWriter(
         self: DocView,
         writer: *std.Io.Writer,
@@ -315,24 +315,24 @@ pub const DocView = struct {
 };
 
 fn getObjectUnchecked(self: DocView, key: []const u8) ?DocView {
-    const count = pool_mod.valueLen(self.raw().*);
+    const count = pool_mod.nodeLen(self.raw().*);
     var cursor = self.index + 1;
     for (0..count) |_| {
         const key_index = cursor;
-        const value_index = key_index + 1;
-        const entry_key = &self.storage.values[key_index];
-        if (pool_mod.valueLen(entry_key.*) == key.len and
+        const node_index = key_index + 1;
+        const entry_key = &self.storage.nodes[key_index];
+        if (pool_mod.nodeLen(entry_key.*) == key.len and
             std.mem.eql(u8, stringAt(self.storage, entry_key), key))
         {
-            return .{ .storage = self.storage, .index = value_index };
+            return .{ .storage = self.storage, .index = node_index };
         }
-        cursor = value_index + subtreeLength(self.storage, value_index);
+        cursor = node_index + subtreeLength(self.storage, node_index);
     }
     return null;
 }
 
 fn getArrayUnchecked(self: DocView, index: usize) ?DocView {
-    if (index >= pool_mod.valueLen(self.raw().*)) return null;
+    if (index >= pool_mod.nodeLen(self.raw().*)) return null;
     var cursor = self.index + 1;
     var remaining = index;
     while (remaining != 0) : (remaining -= 1) {
@@ -341,57 +341,57 @@ fn getArrayUnchecked(self: DocView, index: usize) ?DocView {
     return .{ .storage = self.storage, .index = cursor };
 }
 
-/// The number of pool slots the value at `index` occupies: one for a scalar,
+/// The number of pool slots the node at `index` occupies: one for a scalar,
 /// and the whole subtree for a container.
 inline fn subtreeLength(storage: *const Storage, index: u32) u32 {
-    const value = &storage.values[index];
-    return switch (pool_mod.valueType(value.*)) {
-        .array, .object => @intCast(value.payload.offset / pool_mod.value_size),
+    const node = &storage.nodes[index];
+    return switch (pool_mod.nodeType(node.*)) {
+        .array, .object => @intCast(node.payload.offset / pool_mod.node_size),
         else => 1,
     };
 }
 
-fn stringAt(storage: *const Storage, value: *const pool_mod.Value) []const u8 {
-    const offset: usize = @intCast(value.payload.offset);
-    return storage.input[offset..][0..pool_mod.valueLen(value.*)];
+fn stringAt(storage: *const Storage, node: *const pool_mod.Node) []const u8 {
+    const offset: usize = @intCast(node.payload.offset);
+    return storage.input[offset..][0..pool_mod.nodeLen(node.*)];
 }
 
-/// Serializes a DOM value to a newly allocated JSON byte slice owned by `allocator`.
+/// Serializes a DOM node to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(
     allocator: std.mem.Allocator,
-    value: DocView,
+    view: DocView,
     options: WriteOptions,
 ) ![]u8 {
-    return writer_mod.toSlice(allocator, value, options);
+    return writer_mod.toSlice(allocator, view, options);
 }
 
-/// Serializes a DOM value to `writer` without allocating an output slice.
+/// Serializes a DOM node to `writer` without allocating an output slice.
 pub fn toWriter(
     writer: *std.Io.Writer,
-    value: DocView,
+    view: DocView,
     options: WriteOptions,
 ) !void {
-    return writer_mod.toWriter(writer, value, options);
+    return writer_mod.toWriter(writer, view, options);
 }
 
 test "safe numeric access" {
-    const raw_values = [_]pool_mod.Value{
+    const raw_nodes = [_]pool_mod.Node{
         .{ .tag = pool_mod.makeTag(.number, .none, 0), .payload = .{ .uint = 42 } },
         .{ .tag = pool_mod.makeTag(.number, .one, 0), .payload = .{ .int = -7 } },
         .{ .tag = pool_mod.makeTag(.number, .real, 0), .payload = .{ .float = 1.5 } },
         .{ .tag = pool_mod.makeTag(.number, .none, 0), .payload = .{ .uint = std.math.maxInt(u64) } },
         .{ .tag = pool_mod.makeTag(.bool, .one, 0), .payload = .{ .uint = 0 } },
     };
-    const storage = Storage{ .values = &raw_values, .input = &.{} };
-    const value = DocView{ .storage = &storage, .index = 0 };
+    const storage = Storage{ .nodes = &raw_nodes, .input = &.{} };
+    const node = DocView{ .storage = &storage, .index = 0 };
     const signed = DocView{ .storage = &storage, .index = 1 };
     const floating = DocView{ .storage = &storage, .index = 2 };
     const large = DocView{ .storage = &storage, .index = 3 };
     const boolean = DocView{ .storage = &storage, .index = 4 };
 
-    try std.testing.expectEqual(@as(?i8, 42), value.asNumber(.i8));
-    try std.testing.expectEqual(@as(?u8, 42), value.asNumber(.u8));
-    try std.testing.expectEqual(@as(?f32, 42.0), value.asNumber(.f32));
+    try std.testing.expectEqual(@as(?i8, 42), node.asNumber(.i8));
+    try std.testing.expectEqual(@as(?u8, 42), node.asNumber(.u8));
+    try std.testing.expectEqual(@as(?f32, 42.0), node.asNumber(.f32));
     try std.testing.expectEqual(@as(?i64, -7), signed.asNumber(.i64));
     try std.testing.expect(signed.asNumber(.u64) == null);
     try std.testing.expectEqual(@as(?f64, -7.0), signed.asNumber(.f64));

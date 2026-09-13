@@ -143,8 +143,8 @@ representations. See `src/typed/deserialize.zig`.
 | `dom.parse(allocator, input, options)` | `ParseError!Document` | Parse arbitrary JSON. |
 | `dom.parseInto(storage, input, options)` | `ParseError!Document` | Parse using caller-provided storage. |
 | `dom.parseBufferSize(input_len, options)` | `usize` | Storage size required by `parseInto`. |
-| `dom.toSlice(allocator, value, options)` | `![]u8` | Serialize a `DocView`. |
-| `dom.toWriter(writer, value, options)` | `!void` | Serialize a `DocView`. |
+| `dom.toSlice(allocator, view, options)` | `![]u8` | Serialize a `DocView`. |
+| `dom.toWriter(writer, view, options)` | `!void` | Serialize a `DocView`. |
 
 For workloads that parse many documents in one process,
 `std.heap.c_allocator` is recommended because it reuses freed heap blocks

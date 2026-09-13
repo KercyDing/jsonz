@@ -1,7 +1,7 @@
 const std = @import("std");
 const float = @import("float");
 const pool_mod = @import("pool.zig");
-const value_mod = @import("view.zig");
+const view_mod = @import("view.zig");
 
 /// Options that control DOM serialization.
 pub const WriteOptions = struct {
@@ -85,7 +85,7 @@ inline fn copySized(comptime size: usize, dest: [*]u8, src: [*]const u8) void {
 
 /// A growable output buffer with an unchecked `reserve` + write split.
 ///
-/// Each value reserves the most bytes it can produce and then writes without
+/// Each node reserves the most bytes it can produce and then writes without
 /// further checks, so the hot path is plain stores.
 const Buffer = struct {
     allocator: std.mem.Allocator,
@@ -114,52 +114,52 @@ const Buffer = struct {
     }
 };
 
-/// Serializes `value` to a newly allocated JSON byte slice owned by `allocator`.
+/// Serializes `view` to a newly allocated JSON byte slice owned by `allocator`.
 pub fn toSlice(
     allocator: std.mem.Allocator,
-    value: value_mod.DocView,
+    view: view_mod.DocView,
     options: WriteOptions,
 ) ![]u8 {
     var buffer: Buffer = .{ .allocator = allocator };
     errdefer buffer.list.deinit(allocator);
     // The source length is a good output hint, so the buffer rarely grows.
     const estimate = if (options.pretty)
-        value.storage.input.len * 2 + 64
+        view.storage.input.len * 2 + 64
     else
-        value.storage.input.len + 64;
+        view.storage.input.len + 64;
     try buffer.list.ensureTotalCapacity(allocator, estimate);
-    try write(&buffer, value, options, allocator);
+    try write(&buffer, view, options, allocator);
     return buffer.list.toOwnedSlice(allocator);
 }
 
-/// Serializes `value` to `writer`.
+/// Serializes `view` to `writer`.
 pub fn toWriter(
     writer: *std.Io.Writer,
-    value: value_mod.DocView,
+    view: view_mod.DocView,
     options: WriteOptions,
 ) !void {
     // The document is buffered and flushed once, which keeps this on the same
     // fast path as `toSlice`.
-    const output = try toSlice(std.heap.smp_allocator, value, options);
+    const output = try toSlice(std.heap.smp_allocator, view, options);
     defer std.heap.smp_allocator.free(output);
     try writer.writeAll(output);
 }
 
-/// Writes `value`, iteratively so document depth cannot overflow the stack.
+/// Writes `view`, iteratively so document depth cannot overflow the stack.
 ///
 /// The traversal pushes container frames on an explicit stack and emits
-/// separators before each value instead of overwriting them afterwards.
+/// separators before each node instead of overwriting them afterwards.
 fn write(
     buffer: *Buffer,
-    value: value_mod.DocView,
+    view: view_mod.DocView,
     options: WriteOptions,
     allocator: std.mem.Allocator,
 ) !void {
-    const values = value.storage.values;
-    const input = value.storage.input;
-    const root = values[value.index];
-    const root_type = pool_mod.valueType(root);
-    if ((root_type != .array and root_type != .object) or pool_mod.valueLen(root) == 0) {
+    const nodes = view.storage.nodes;
+    const input = view.storage.input;
+    const root = nodes[view.index];
+    const root_type = pool_mod.nodeType(root);
+    if ((root_type != .array and root_type != .object) or pool_mod.nodeLen(root) == 0) {
         return writeSingle(buffer, input, root);
     }
 
@@ -167,28 +167,28 @@ fn write(
     defer stack.deinit(allocator);
 
     var object = root_type == .object;
-    var remaining: usize = if (object) pool_mod.valueLen(root) * 2 else pool_mod.valueLen(root);
+    var remaining: usize = if (object) pool_mod.nodeLen(root) * 2 else pool_mod.nodeLen(root);
     var first = true;
     var level: usize = 1;
-    var index = value.index + 1;
+    var index = view.index + 1;
 
     try buffer.reserve(2);
     buffer.put(if (object) '{' else '[');
     if (options.pretty) buffer.put('\n');
 
     while (true) {
-        const item = values[index];
-        const item_type = pool_mod.valueType(item);
+        const node = nodes[index];
+        const item_type = pool_mod.nodeType(node);
         const is_key = object and remaining % 2 == 0;
 
         if (!first) {
             try buffer.reserve(2);
             if (is_key) {
-                // The previous slot was an object value.
+                // The previous slot held an object member value.
                 buffer.put(',');
                 if (options.pretty) buffer.put('\n');
             } else if (object) {
-                // This slot is an object value, directly after its key.
+                // This slot is an object member value, directly after its key.
                 buffer.put(':');
                 if (options.pretty) buffer.put(' ');
             } else {
@@ -196,7 +196,7 @@ fn write(
                 if (options.pretty) buffer.put('\n');
             }
         }
-        // Object values stay on their key's line; keys and array elements do not.
+        // Object member values stay on their key's line; keys and array elements do not.
         if (options.pretty and !(object and !is_key)) {
             try buffer.reserve(level * 4);
             buffer.putSpaces(level * 4);
@@ -204,11 +204,11 @@ fn write(
         first = false;
 
         switch (item_type) {
-            .string => try writeString(buffer, input, item),
-            .number => try writeNumber(buffer, item),
+            .string => try writeString(buffer, input, node),
+            .number => try writeNumber(buffer, node),
             .bool => {
                 try buffer.reserve(5);
-                buffer.putAll(if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false");
+                buffer.putAll(if (pool_mod.nodeSubtype(node) == pool_mod.true_flag) "true" else "false");
             },
             .null => {
                 try buffer.reserve(4);
@@ -216,7 +216,7 @@ fn write(
             },
             .array, .object => {
                 const child_object = item_type == .object;
-                const child_len = pool_mod.valueLen(item);
+                const child_len = pool_mod.nodeLen(node);
                 if (child_len == 0) {
                     try buffer.reserve(2);
                     buffer.putAll(if (child_object) "{}" else "[]");
@@ -262,14 +262,14 @@ fn write(
     }
 }
 
-/// Writes a value that is not a non-empty container.
-fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
-    switch (pool_mod.valueType(item)) {
-        .string => try writeString(buffer, input, item),
-        .number => try writeNumber(buffer, item),
+/// Writes a node that is not a non-empty container.
+fn writeSingle(buffer: *Buffer, input: []const u8, node: pool_mod.Node) !void {
+    switch (pool_mod.nodeType(node)) {
+        .string => try writeString(buffer, input, node),
+        .number => try writeNumber(buffer, node),
         .bool => {
             try buffer.reserve(5);
-            buffer.putAll(if (pool_mod.valueSubtype(item) == pool_mod.true_value) "true" else "false");
+            buffer.putAll(if (pool_mod.nodeSubtype(node) == pool_mod.true_flag) "true" else "false");
         },
         .null => {
             try buffer.reserve(4);
@@ -292,14 +292,14 @@ fn writeSingle(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
 /// Escapes `"`, `\`, and the C0 control characters, using uppercase hex for
 /// `\u00XX`; every other byte, including DEL and any valid multi-byte sequence,
 /// is copied through.
-inline fn writeString(buffer: *Buffer, input: []const u8, item: pool_mod.Value) !void {
-    const offset: usize = @intCast(item.payload.offset);
-    const bytes = input[offset..][0..pool_mod.valueLen(item)];
+inline fn writeString(buffer: *Buffer, input: []const u8, node: pool_mod.Node) !void {
+    const offset: usize = @intCast(node.payload.offset);
+    const bytes = input[offset..][0..pool_mod.nodeLen(node)];
 
     // Worst case is six bytes per input byte, plus the quotes.
     try buffer.reserve(bytes.len * 6 + 2);
     buffer.put('"');
-    if (pool_mod.valueSubtype(item) == pool_mod.no_escape) {
+    if (pool_mod.nodeSubtype(node) == pool_mod.no_escape) {
         buffer.putAll(bytes);
     } else {
         // Out of line: most strings need no escaping, and growing this
@@ -359,16 +359,16 @@ inline fn writeEscape(buffer: *Buffer, byte: u8) void {
     }
 }
 
-inline fn writeNumber(buffer: *Buffer, item: pool_mod.Value) !void {
-    switch (pool_mod.valueSubtype(item)) {
-        .real => try writeReal(buffer, item.payload.float),
+inline fn writeNumber(buffer: *Buffer, node: pool_mod.Node) !void {
+    switch (pool_mod.nodeSubtype(node)) {
+        .real => try writeReal(buffer, node.payload.float),
         .one => {
             try buffer.reserve(21);
-            writeSigned(buffer, item.payload.int);
+            writeSigned(buffer, node.payload.int);
         },
         .none => {
             try buffer.reserve(20);
-            writeUnsigned(buffer, item.payload.uint);
+            writeUnsigned(buffer, node.payload.uint);
         },
     }
 }

@@ -5,7 +5,6 @@ const pool_mod = @import("pool.zig");
 const Pool = pool_mod.Pool;
 const Subtype = pool_mod.Subtype;
 const Type = pool_mod.Type;
-const Value = pool_mod.Value;
 
 /// Bytes checked at once while scanning a string for characters that need work.
 const scan_chunk = 32;
@@ -89,7 +88,7 @@ const State = enum {
     done,
 };
 
-/// A value's pool index and the input offset just past it.
+/// A node's pool index and the input offset just past it.
 const Scan = struct {
     index: u32,
     pos: usize,
@@ -109,7 +108,7 @@ const Closed = struct {
     count: usize,
 };
 
-/// A value yielded by `scanValue`.
+/// A node yielded by `scanValue`.
 const Scanned = struct {
     index: u32,
     pos: usize,
@@ -127,7 +126,7 @@ const Opened = struct {
 /// The reader's finite state machine.
 ///
 /// The cursor and container counters are locals in `run`, not fields: writing to
-/// the input and the pool would otherwise force a reload on every value.
+/// the input and the pool would otherwise force a reload on every node.
 const Reader = struct {
     /// The padded input; `self.end == end + 4`.
     input: []u8,
@@ -198,7 +197,7 @@ const Reader = struct {
                         pos = scanned.pos;
                         count += 1;
                         // A minified document puts the separator right after
-                        // the value, so try that before scanning for trivia.
+                        // the node, so try that before scanning for trivia.
                         if (pos == self.end) return error.InvalidJson;
                         var separator = input[pos];
                         if (separator != ',' and separator != ']') {
@@ -289,10 +288,10 @@ const Reader = struct {
                         pos += 1;
                         pos = try self.skipTrivia(pos);
                         if (pos == self.end) return error.InvalidJson;
-                        const value_byte = input[pos];
-                        if (value_byte == '[' or value_byte == '{') {
+                        const next_byte = input[pos];
+                        if (next_byte == '[' or next_byte == '{') {
                             const opened = try self.openContainer(
-                                if (value_byte == '{') .object else .array,
+                                if (next_byte == '{') .object else .array,
                                 current,
                                 count,
                                 pos,
@@ -303,8 +302,8 @@ const Reader = struct {
                             state = opened.state;
                             break :run;
                         }
-                        const value = try self.scanScalar(pos);
-                        pos = value.pos;
+                        const scanned = try self.scanScalar(pos);
+                        pos = scanned.pos;
                         count += 1;
                         pos = try self.skipTrivia(pos);
                         if (pos == self.end) return error.InvalidJson;
@@ -370,14 +369,14 @@ const Reader = struct {
         return root orelse unreachable;
     }
 
-    /// Scans one value: a scalar value, or a container header that the caller
+    /// Scans one node: a scalar, or a container header that the caller
     /// must descend into.
-    /// Scans one scalar value; containers are handled by the state machine.
+    /// Scans one scalar; containers are handled by the state machine.
     inline fn scanScalar(self: *Reader, pos: usize) Error!Scan {
         switch (self.input[pos]) {
             '"' => return self.scanString(pos),
-            't' => return self.scanLiteral(pos, "true", .bool, pool_mod.true_value, 1),
-            'f' => return self.scanLiteral(pos, "false", .bool, pool_mod.false_value, 0),
+            't' => return self.scanLiteral(pos, "true", .bool, pool_mod.true_flag, 1),
+            'f' => return self.scanLiteral(pos, "false", .bool, pool_mod.false_flag, 0),
             'n' => return self.scanLiteral(pos, "null", .null, .none, 0),
             '-', '0'...'9' => return self.scanNumber(pos),
             else => return error.InvalidJson,
@@ -401,11 +400,11 @@ const Reader = struct {
                 return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
             },
             't' => {
-                const scanned = try self.scanLiteral(pos, "true", .bool, pool_mod.true_value, 1);
+                const scanned = try self.scanLiteral(pos, "true", .bool, pool_mod.true_flag, 1);
                 return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
             },
             'f' => {
-                const scanned = try self.scanLiteral(pos, "false", .bool, pool_mod.false_value, 0);
+                const scanned = try self.scanLiteral(pos, "false", .bool, pool_mod.false_flag, 0);
                 return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
             },
             'n' => {
@@ -422,19 +421,19 @@ const Reader = struct {
 
     inline fn openContainer(
         self: *Reader,
-        value_type: Type,
+        node_type: Type,
         parent: ?u32,
         count: usize,
         pos: usize,
     ) Error!Opened {
-        const index = try self.append(pool_mod.makeTag(value_type, .none, 0), .{ .uint = 0 });
+        const index = try self.append(pool_mod.makeTag(node_type, .none, 0), .{ .uint = 0 });
         if (parent) |parent_index| {
             // Count the new child in the parent. For an array this is its final
             // length; for an object it is the number of finished key/value
             // slots, converted to a pair count when the object closes.
-            const parent_value = self.pool.at(parent_index).*;
+            const parent_node = self.pool.at(parent_index).*;
             self.pool.atMut(parent_index).tag = pool_mod.makeTag(
-                pool_mod.valueType(parent_value),
+                pool_mod.nodeType(parent_node),
                 .none,
                 count + 1,
             );
@@ -443,19 +442,19 @@ const Reader = struct {
         return .{
             .index = index,
             .pos = pos + 1,
-            .state = if (value_type == .object) .object_key else .array_value,
+            .state = if (node_type == .object) .object_key else .array_value,
         };
     }
 
     inline fn closeContainer(self: *Reader, container: u32, count: usize, pos: usize) Error!Closed {
-        const value = self.pool.at(container).*;
-        const value_type = pool_mod.valueType(value);
-        const parent = container - @as(u32, @intCast(value.payload.offset / pool_mod.value_size));
-        const len = if (value_type == .object) count / 2 else count;
-        // The offset points one value past the last child, so that walking
+        const node = self.pool.at(container).*;
+        const node_type = pool_mod.nodeType(node);
+        const parent = container - @as(u32, @intCast(node.payload.offset / pool_mod.node_size));
+        const len = if (node_type == .object) count / 2 else count;
+        // The offset points one node past the last child, so that walking
         // siblings can skip this whole subtree.
         self.pool.atMut(container).* = .{
-            .tag = pool_mod.makeTag(value_type, .none, len),
+            .tag = pool_mod.makeTag(node_type, .none, len),
             .payload = .{ .offset = pool_mod.byteOffset(container, @intCast(self.pool.len)) },
         };
         if (parent == container) {
@@ -464,12 +463,12 @@ const Reader = struct {
             return .{ .state = .done, .pos = end, .current = container, .count = count };
         }
 
-        const parent_value = self.pool.at(parent).*;
+        const parent_node = self.pool.at(parent).*;
         return .{
-            .state = if (pool_mod.valueType(parent_value) == .object) .object_end else .array_end,
+            .state = if (pool_mod.nodeType(parent_node) == .object) .object_end else .array_end,
             .pos = pos,
             .current = parent,
-            .count = pool_mod.valueLen(parent_value),
+            .count = pool_mod.nodeLen(parent_node),
         };
     }
 
@@ -477,7 +476,7 @@ const Reader = struct {
         self: *Reader,
         pos: usize,
         comptime text: []const u8,
-        value_type: Type,
+        node_type: Type,
         subtype: Subtype,
         payload: u64,
     ) Error!Scan {
@@ -486,7 +485,7 @@ const Reader = struct {
             return error.InvalidJson;
         }
         return .{
-            .index = try self.append(pool_mod.makeTag(value_type, subtype, 0), .{ .uint = payload }),
+            .index = try self.append(pool_mod.makeTag(node_type, subtype, 0), .{ .uint = payload }),
             .pos = pos + text.len,
         };
     }
@@ -543,7 +542,7 @@ const Reader = struct {
         };
     }
 
-    /// Reads a string value, decoding escapes in place.
+    /// Reads a string, decoding escapes in place.
     ///
     /// Strings without escapes take a scan-only path. Plain 32-byte chunks are
     /// skipped with SIMD; a chunk holding a quote, escape, control byte, or
@@ -762,7 +761,7 @@ const Reader = struct {
         }
 
         // Encode the code point directly; it is already known to be a scalar
-        // value, so no validation is needed.
+        // node, so no validation is needed.
         const input = self.input;
         if (codepoint < 0x80) {
             input[write] = @intCast(codepoint);
@@ -799,9 +798,9 @@ const Reader = struct {
         return (@as(u21, a) << 12) | (@as(u21, b) << 8) | (@as(u21, c) << 4) | d;
     }
 
-    /// Appends a value given as its two words; only growth is a call.
+    /// Appends a node given as its two words; only growth is a call.
     ///
-    /// Passing them separately keeps the 16-byte `Value` out of the caller's
+    /// Passing them separately keeps the 16-byte `Node` out of the caller's
     /// stack frame.
     inline fn append(self: *Reader, tag: pool_mod.Tag, payload: pool_mod.Payload) Error!u32 {
         const pool = self.pool;
@@ -870,8 +869,8 @@ test "nested values" {
     defer result[0].deinit();
     defer std.testing.allocator.free(result[2]);
     const pool = &result[0];
-    try std.testing.expectEqual(Type.object, pool_mod.valueType(pool.at(result[1]).*));
-    try std.testing.expectEqual(@as(usize, 2), pool_mod.valueLen(pool.at(result[1]).*));
+    try std.testing.expectEqual(Type.object, pool_mod.nodeType(pool.at(result[1]).*));
+    try std.testing.expectEqual(@as(usize, 2), pool_mod.nodeLen(pool.at(result[1]).*));
     // 1 root object + 2 keys + 2 values (array, string) + 3 array items =
     // 9 values, keys included.
     try std.testing.expectEqual(@as(usize, 9), pool.items().len);
@@ -916,10 +915,10 @@ test "unicode escapes" {
         var result = try readWithOptions(&input, .{}, std.testing.allocator);
         defer result[0].deinit();
         defer std.testing.allocator.free(result[2]);
-        const value = result[0].at(result[1]).*;
+        const node = result[0].at(result[1]).*;
         try std.testing.expectEqualStrings(
             case[1],
-            result[2][@intCast(value.payload.offset)..][0..pool_mod.valueLen(value)],
+            result[2][@intCast(node.payload.offset)..][0..pool_mod.nodeLen(node)],
         );
     }
 }
@@ -967,10 +966,10 @@ test "number subtypes" {
         var result = try readWithOptions(@constCast(case.text), .{}, std.testing.allocator);
         defer result[0].deinit();
         defer std.testing.allocator.free(result[2]);
-        const value = result[0].at(result[1]).*;
-        try std.testing.expectEqual(Type.number, pool_mod.valueType(value));
-        try std.testing.expectEqual(case.subtype, pool_mod.valueSubtype(value));
-        try std.testing.expectEqual(case.bits, value.payload.uint);
+        const node = result[0].at(result[1]).*;
+        try std.testing.expectEqual(Type.number, pool_mod.nodeType(node));
+        try std.testing.expectEqual(case.subtype, pool_mod.nodeSubtype(node));
+        try std.testing.expectEqual(case.bits, node.payload.uint);
     }
 }
 

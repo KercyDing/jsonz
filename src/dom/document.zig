@@ -16,7 +16,7 @@ pub const ParseError = reader.Error;
 /// and become invalid after `deinit`.
 pub const Document = struct {
     /// Caller-provided storage when `parseInto` was used; otherwise the input
-    /// buffer and the value pool are owned by `pool.allocator`.
+    /// buffer and the node pool are owned by `pool.allocator`.
     pool: pool_mod.Pool,
     storage: view.Storage,
     root_index: u32,
@@ -30,42 +30,42 @@ pub const Document = struct {
         self.* = undefined;
     }
 
-    /// Returns a view of the document's root value.
+    /// Returns a view of the document's root node.
     pub fn root(self: *const Document) DocView {
         return .{ .storage = &self.storage, .index = self.root_index };
     }
 
-    /// Returns the kind of the root value.
+    /// Returns the kind of the root node.
     pub fn kind(self: *const Document) view.Kind {
         return self.root().kind();
     }
 
-    /// Returns whether the root value is JSON `null`.
+    /// Returns whether the root node is JSON `null`.
     pub fn isNull(self: *const Document) bool {
         return self.root().isNull();
     }
 
-    /// Returns whether the root value is a boolean.
+    /// Returns whether the root node is a boolean.
     pub fn isBool(self: *const Document) bool {
         return self.root().isBool();
     }
 
-    /// Returns whether the root value can be converted to the requested numeric type.
+    /// Returns whether the root node can be converted to the requested numeric type.
     pub fn isNumber(self: *const Document, comptime target: view.NumberType) bool {
         return self.root().isNumber(target);
     }
 
-    /// Returns whether the root value is a string.
+    /// Returns whether the root node is a string.
     pub fn isString(self: *const Document) bool {
         return self.root().isString();
     }
 
-    /// Returns whether the root value is an array.
+    /// Returns whether the root node is an array.
     pub fn isArray(self: *const Document) bool {
         return self.root().isArray();
     }
 
-    /// Returns whether the root value is an object.
+    /// Returns whether the root node is an object.
     pub fn isObject(self: *const Document) bool {
         return self.root().isObject();
     }
@@ -156,7 +156,7 @@ pub const Document = struct {
         return self.root().ptrGetSlice(ptr);
     }
 
-    /// Serializes the root value to a newly allocated JSON byte slice owned by `allocator`.
+    /// Serializes the root node to a newly allocated JSON byte slice owned by `allocator`.
     pub fn toSlice(
         self: *const Document,
         allocator: std.mem.Allocator,
@@ -165,7 +165,7 @@ pub const Document = struct {
         return self.root().toSlice(allocator, options);
     }
 
-    /// Serializes the root value to `writer` without allocating an output slice.
+    /// Serializes the root node to `writer` without allocating an output slice.
     pub fn toWriter(
         self: *const Document,
         writer: *std.Io.Writer,
@@ -198,7 +198,7 @@ pub fn parse(
     const root_index = try reader.read(&pool, owned, input.len, options);
     return .{
         .pool = pool,
-        .storage = .{ .values = pool.items(), .input = owned },
+        .storage = .{ .nodes = pool.items(), .input = owned },
         .root_index = root_index,
     };
 }
@@ -215,7 +215,7 @@ pub fn parseInto(
 ) ParseError!Document {
     if (storage.len < input.len + 4) return error.OutOfMemory;
 
-    // The input copy (plus four zero padding bytes) comes first, then the value
+    // The input copy (plus four zero padding bytes) comes first, then the node
     // pool, so a decode in place never disturbs the values.
     const input_copy = storage[0 .. input.len + 4];
     @memcpy(input_copy[0..input.len], input);
@@ -225,7 +225,7 @@ pub fn parseInto(
     const root_index = try reader.read(&pool, input_copy, input.len, options);
     return .{
         .pool = pool,
-        .storage = .{ .values = pool.items(), .input = input_copy },
+        .storage = .{ .nodes = pool.items(), .input = input_copy },
         .root_index = root_index,
     };
 }
@@ -233,11 +233,11 @@ pub fn parseInto(
 /// Returns the minimum storage size required by `parseInto` for this input
 /// length and options.
 ///
-/// Every value occupies at least one input byte, so the value pool never needs
+/// Every node occupies at least one input byte, so the node pool never needs
 /// more than `16 * input_len` bytes, plus the input copy and alignment padding.
 pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
     _ = options;
-    const values = std.math.mul(usize, input_len, pool_mod.value_size) catch
+    const values = std.math.mul(usize, input_len, pool_mod.node_size) catch
         return std.math.maxInt(usize);
     // Four bytes of reader padding, plus alignment and slack.
     const total = std.math.add(usize, input_len, 4) catch
@@ -249,7 +249,7 @@ pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
 
 /// Whether the document is indented rather than compact: a container opener
 /// followed by two whitespace bytes. Scanning the whole input would call dense
-/// documents with a little indentation "pretty" and badly under-size the value
+/// documents with a little indentation "pretty" and badly under-size the node
 /// pool.
 fn looksPretty(input: []const u8) bool {
     var index: usize = 0;

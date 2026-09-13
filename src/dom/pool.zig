@@ -1,8 +1,8 @@
 const std = @import("std");
 
-/// The JSON value type, stored in the low three bits of a tag.
+/// The JSON node type, stored in the low three bits of a tag.
 pub const Type = enum(u3) {
-    /// Only the default tag of an unset value uses this.
+    /// Only the default tag of an unset node uses this.
     none = 0,
     null = 1,
     bool = 2,
@@ -12,7 +12,7 @@ pub const Type = enum(u3) {
     object = 6,
 };
 
-/// The value subtype, stored in the next two bits of a tag.
+/// The node subtype, stored in the next two bits of a tag.
 pub const Subtype = enum(u2) {
     none = 0,
     one = 1,
@@ -20,9 +20,9 @@ pub const Subtype = enum(u2) {
 };
 
 /// Boolean `false`.
-pub const false_value: Subtype = .none;
+pub const false_flag: Subtype = .none;
 /// Boolean `true`.
-pub const true_value: Subtype = .one;
+pub const true_flag: Subtype = .one;
 /// Unsigned integer.
 pub const uint: Subtype = .none;
 /// Signed integer.
@@ -30,7 +30,7 @@ pub const sint: Subtype = .one;
 /// String that contains no escape sequence.
 pub const no_escape: Subtype = .one;
 
-/// The first word of every value: type, subtype, and length.
+/// The first word of every node: type, subtype, and length.
 ///
 /// The layout is 3 bits of type, 2 bits of subtype, 3 reserved bits, then a
 /// 56-bit length.
@@ -43,7 +43,7 @@ pub const Tag = packed struct(u64) {
     len: u56 = 0,
 };
 
-/// The second word of every value: the scalar itself, a string offset, or a
+/// The second word of every node: the scalar itself, a string offset, or a
 /// container offset.
 pub const Payload = extern union {
     uint: u64,
@@ -51,89 +51,89 @@ pub const Payload = extern union {
     float: f64,
     /// For a string, the byte offset of its text in the input buffer.
     ///
-    /// For a container, the distance in bytes to the value after its subtree
+    /// For a container, the distance in bytes to the node after its subtree
     /// (a relative offset so the pool can be reallocated), or, while the
     /// container is still open, the distance to its parent.
     offset: u64,
 };
 
-/// One 16-byte DOM value: a tag and a payload.
-pub const Value = extern struct {
+/// One 16-byte DOM node: a tag and a payload.
+pub const Node = extern struct {
     tag: Tag = .{ .type = .none },
     payload: Payload = .{ .uint = 0 },
 };
 
-/// The size of one value.
-pub const value_size = @sizeOf(Value);
+/// The size of one node.
+pub const node_size = @sizeOf(Node);
 
 /// Packs a type, subtype, and length into a tag.
-pub fn makeTag(value_type: Type, subtype: Subtype, len: usize) Tag {
+pub fn makeTag(node_type: Type, subtype: Subtype, len: usize) Tag {
     return .{
-        .type = value_type,
+        .type = node_type,
         .subtype = subtype,
         .len = @intCast(len),
     };
 }
 
-pub fn valueType(value: Value) Type {
-    return value.tag.type;
+pub fn nodeType(node: Node) Type {
+    return node.tag.type;
 }
 
-pub fn valueSubtype(value: Value) Subtype {
-    return value.tag.subtype;
+pub fn nodeSubtype(node: Node) Subtype {
+    return node.tag.subtype;
 }
 
-pub fn valueLen(value: Value) usize {
-    return value.tag.len;
+pub fn nodeLen(node: Node) usize {
+    return node.tag.len;
 }
 
-/// The byte distance between two value indices.
+/// The byte distance between two node indices.
 pub fn byteOffset(from: u32, to: u32) u64 {
-    return (@as(u64, to) - @as(u64, from)) * value_size;
+    return (@as(u64, to) - @as(u64, from)) * node_size;
 }
 
 /// The pool index `offset` bytes away from `from`.
 pub fn indexAtOffset(from: u32, offset: u64) u32 {
-    std.debug.assert(offset % value_size == 0);
-    return from + @as(u32, @intCast(offset / value_size));
+    std.debug.assert(offset % node_size == 0);
+    return from + @as(u32, @intCast(offset / node_size));
 }
 
-/// Value storage for one document.
+/// Node storage for one document.
 ///
-/// Values live in one contiguous, depth-first array: a container's children
-/// start at the next index, and `payload.offset` skips to the value after a
+/// Nodes live in one contiguous, depth-first array: a container's children
+/// start at the next index, and `payload.offset` skips to the node after a
 /// container's subtree. A pool is either owned by an allocator and can grow, or
 /// backed by caller storage and fails with `error.OutOfMemory` when it is full.
 pub const Pool = struct {
     /// Null for caller-provided storage, which `deinit` must not free.
     allocator: ?std.mem.Allocator = null,
     /// The allocated capacity; `len` says how much of it is used.
-    buffer: []Value = &.{},
+    buffer: []Node = &.{},
     len: usize = 0,
 
     /// Creates a growing pool sized for `input_len` bytes of JSON.
     ///
-    /// `pretty` widens the estimate because whitespace bytes carry no values.
+    /// `pretty` widens the estimate because whitespace bytes carry no nodes.
     pub fn init(allocator: std.mem.Allocator, input_len: usize, pretty: bool) !Pool {
         const ratio: usize = if (pretty) 16 else 6;
         const estimate = input_len / ratio + 4;
         return .{
             .allocator = allocator,
-            .buffer = try allocator.alloc(Value, estimate),
+            .buffer = try allocator.alloc(Node, estimate),
         };
     }
 
-    /// Uses `storage` as fixed-capacity value storage without owning it.
+    /// Uses `storage` as fixed-capacity node storage without owning it.
     ///
-    /// The region is aligned up to `Value` alignment; the returned pool cannot
+    /// The region is aligned up to `Node` alignment; the returned pool cannot
     /// grow.
     pub fn initFixed(storage: []u8) Pool {
         const address = @intFromPtr(storage.ptr);
-        const aligned = std.mem.alignForward(usize, address, @alignOf(Value));
+        const aligned = std.mem.alignForward(usize, address, @alignOf(Node));
         if (aligned - address >= storage.len) return .{};
-        const values: [*]Value = @ptrFromInt(aligned);
-        const count = (storage.len - (aligned - address)) / value_size;
-        return .{ .buffer = values[0..count] };
+        const nodes: [*]Node = @ptrFromInt(aligned);
+        const count = (storage.len - (aligned - address)) / node_size;
+        return .{ .buffer = nodes[0..count] };
     }
 
     pub fn deinit(self: *Pool) void {
@@ -141,24 +141,24 @@ pub const Pool = struct {
         self.* = undefined;
     }
 
-    /// The values appended so far.
-    pub fn items(self: *const Pool) []const Value {
+    /// The nodes appended so far.
+    pub fn items(self: *const Pool) []const Node {
         return self.buffer[0..self.len];
     }
 
-    pub fn append(self: *Pool, value: Value) !u32 {
+    pub fn append(self: *Pool, node: Node) !u32 {
         if (self.len == self.buffer.len) try self.grow();
         const index = std.math.cast(u32, self.len) orelse error.OutOfMemory;
-        self.buffer[self.len] = value;
+        self.buffer[self.len] = node;
         self.len += 1;
         return index;
     }
 
-    pub fn at(self: *const Pool, index: u32) *const Value {
+    pub fn at(self: *const Pool, index: u32) *const Node {
         return &self.buffer[index];
     }
 
-    pub fn atMut(self: *Pool, index: u32) *Value {
+    pub fn atMut(self: *Pool, index: u32) *Node {
         return &self.buffer[index];
     }
 
@@ -169,19 +169,19 @@ pub const Pool = struct {
     }
 };
 
-test "value layout" {
-    try std.testing.expectEqual(@as(usize, 16), @sizeOf(Value));
-    try std.testing.expectEqual(@as(usize, 8), @alignOf(Value));
-    try std.testing.expectEqual(@as(usize, 0), @offsetOf(Value, "tag"));
-    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Value, "payload"));
+test "node layout" {
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(Node));
+    try std.testing.expectEqual(@as(usize, 8), @alignOf(Node));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(Node, "tag"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Node, "payload"));
 }
 
 test "tag fields" {
-    const value = Value{ .tag = makeTag(.number, .real, 42), .payload = .{ .float = 1.5 } };
-    try std.testing.expectEqual(Type.number, valueType(value));
-    try std.testing.expectEqual(Subtype.real, valueSubtype(value));
-    try std.testing.expectEqual(@as(usize, 42), valueLen(value));
-    try std.testing.expectEqual(@as(f64, 1.5), value.payload.float);
+    const node = Node{ .tag = makeTag(.number, .real, 42), .payload = .{ .float = 1.5 } };
+    try std.testing.expectEqual(Type.number, nodeType(node));
+    try std.testing.expectEqual(Subtype.real, nodeSubtype(node));
+    try std.testing.expectEqual(@as(usize, 42), nodeLen(node));
+    try std.testing.expectEqual(@as(f64, 1.5), node.payload.float);
 }
 
 test "container offsets" {
@@ -202,7 +202,7 @@ test "pool growth" {
 }
 
 test "fixed pool" {
-    var storage: [4]Value align(@alignOf(Value)) = undefined;
+    var storage: [4]Node align(@alignOf(Node)) = undefined;
     var pool = Pool.initFixed(std.mem.asBytes(&storage));
     try std.testing.expectEqual(@as(usize, 4), pool.buffer.len);
     for (0..4) |_| {

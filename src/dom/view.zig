@@ -314,7 +314,7 @@ pub const DocView = struct {
     }
 };
 
-fn getObjectUnchecked(self: DocView, key: []const u8) ?DocView {
+pub inline fn getObjectUnchecked(self: DocView, key: []const u8) ?DocView {
     const count = pool_mod.nodeLen(self.raw().*);
     var cursor = self.index + 1;
     for (0..count) |_| {
@@ -331,7 +331,7 @@ fn getObjectUnchecked(self: DocView, key: []const u8) ?DocView {
     return null;
 }
 
-fn getArrayUnchecked(self: DocView, index: usize) ?DocView {
+inline fn getArrayUnchecked(self: DocView, index: usize) ?DocView {
     if (index >= pool_mod.nodeLen(self.raw().*)) return null;
     var cursor = self.index + 1;
     var remaining = index;

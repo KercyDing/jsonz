@@ -66,6 +66,8 @@ const Segment = struct {
     index: ?usize,
     /// Whether the token is the RFC 6901 `-` array token.
     dash: bool,
+    /// Whether the token contains a `~` escape.
+    escaped: bool,
 };
 
 fn descendToken(current: DocView, token: []const u8) PointerError!DocView {
@@ -76,8 +78,11 @@ fn descendToken(current: DocView, token: []const u8) PointerError!DocView {
     return current.getAt(index) orelse error.OutOfBounds;
 }
 
-fn descendSegment(current: DocView, segment: Segment) PointerError!DocView {
-    if (current.isObject()) return objectLookup(current, segment.token);
+inline fn descendSegment(current: DocView, segment: Segment) PointerError!DocView {
+    if (current.isObject()) {
+        if (!segment.escaped) return view_mod.getObjectUnchecked(current, segment.token) orelse error.MissingField;
+        return objectLookupEscaped(current, segment.token);
+    }
     if (!current.isArray()) return error.UnexpectedType;
     if (segment.dash) return error.OutOfBounds;
     const index = segment.index orelse return error.InvalidArrayIndex;
@@ -86,12 +91,18 @@ fn descendSegment(current: DocView, segment: Segment) PointerError!DocView {
 
 /// Looks up the first object member whose name matches the token. Duplicate
 /// member names resolve to the first one, like the native parsers.
-fn objectLookup(current: DocView, token: []const u8) PointerError!DocView {
-    const escaped = std.mem.indexOfScalar(u8, token, '~') != null;
+inline fn objectLookup(current: DocView, token: []const u8) PointerError!DocView {
+    if (std.mem.indexOfScalar(u8, token, '~') == null) {
+        return view_mod.getObjectUnchecked(current, token) orelse error.MissingField;
+    }
+    return objectLookupEscaped(current, token);
+}
+
+/// The slow path for tokens that contain `~0`/`~1` escapes.
+fn objectLookupEscaped(current: DocView, token: []const u8) PointerError!DocView {
     var iterator = current.objectIterator() catch unreachable;
     while (iterator.next()) |entry| {
-        const matches = if (escaped) tokenEql(entry.key, token) else std.mem.eql(u8, entry.key, token);
-        if (matches) return entry.value;
+        if (tokenEql(entry.key, token)) return entry.value;
     }
     return error.MissingField;
 }
@@ -156,6 +167,7 @@ fn segmentOf(token: []const u8) Segment {
         .token = token,
         .index = parseArrayIndex(token),
         .dash = std.mem.eql(u8, token, "-"),
+        .escaped = std.mem.indexOfScalar(u8, token, '~') != null,
     };
 }
 

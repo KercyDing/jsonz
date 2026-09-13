@@ -1,6 +1,6 @@
 .{
     .name = .jsonz,
-    .version = "0.6.1",
+    .version = "0.7.0",
     .fingerprint = 0x640fc5959ef13f0c,
     .minimum_zig_version = "0.16.0",
     .paths = .{

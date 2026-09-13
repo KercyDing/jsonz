@@ -23,11 +23,6 @@ fuzzy(iterations = "100000"):
 bench(mode = "dom"):
     zig build bench -Dmode={{mode}}
 
-[help] Run zBench microbenchmarks
-[fail] Microbenchmarks failed.
-microbench():
-    zig build microbench -Dmicrobench=true -Doptimize=ReleaseFast
-
 [help] Build in release mode
 [desc] Run `only release false` to turn off the strip.
 [pass] Release build complete.
@@ -62,7 +57,7 @@ group master {
 [pass] Formatting complete.
 [fail] Formatting failed.
 fmt():
-    zig fmt src tests benchmarks microbench build.zig build.zig.zon
+    zig fmt src tests benchmarks build.zig build.zig.zon
 
 [help] Clean cache, build output and packages
 [pass] Clean complete.

@@ -68,11 +68,6 @@ pub fn build(b: *std.Build) void {
 
     // Benchmarks
     addBench(b, target);
-
-    const microbench_step = b.step("microbench", "Run zBench microbenchmarks");
-    if (b.option(bool, "microbench", "Enable zBench microbenchmarks") orelse false) {
-        addMicrobench(b, microbench_step, target);
-    }
 }
 
 fn addBench(
@@ -136,53 +131,6 @@ fn addBench(
     }
 
     bench_step.dependOn(&run.step);
-}
-
-fn addMicrobench(
-    b: *std.Build,
-    microbench_step: *std.Build.Step,
-    target: std.Build.ResolvedTarget,
-) void {
-    const zbench_dep = b.lazyDependency("zbench", .{
-        .target = target,
-        .optimize = .ReleaseFast,
-    }) orelse return;
-
-    const float_mod = b.createModule(.{
-        .root_source_file = b.path("src/float/root.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
-
-    const jsonz_mod = b.createModule(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .imports = &.{
-            .{ .name = "float", .module = float_mod },
-        },
-    });
-
-    const microbench_mod = b.createModule(.{
-        .root_source_file = b.path("microbench/main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "float", .module = float_mod },
-            .{ .name = "jsonz", .module = jsonz_mod },
-            .{ .name = "zbench", .module = zbench_dep.module("zbench") },
-        },
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "jsonz-microbench",
-        .root_module = microbench_mod,
-    });
-    exe.use_llvm = true;
-
-    const run = b.addRunArtifact(exe);
-    microbench_step.dependOn(&run.step);
 }
 
 comptime {

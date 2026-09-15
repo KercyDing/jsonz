@@ -47,9 +47,6 @@ pub const parseInto = document.parseInto;
 /// Returns the required storage size for `parseInto`.
 pub const parseBufferSize = document.parseBufferSize;
 
-/// RFC 6902 JSON Patch.
-pub const patch = document_mut.patch;
-
 /// Parses JSON straight into a mutable document.
 pub const parseMut = document_mut.parse;
 

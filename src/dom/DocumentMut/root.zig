@@ -18,8 +18,6 @@ pub const AccessError = common.AccessError;
 pub const PointerError = common.PointerError;
 /// Options that control DOM serialization.
 pub const WriteOptions = common.WriteOptions;
-/// RFC 6902 JSON Patch.
-pub const patch = @import("patch.zig");
 /// Parses JSON straight into a mutable document.
 pub const parse = DocumentMut.parse;
 

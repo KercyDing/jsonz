@@ -11,7 +11,7 @@ const common = @import("../common.zig");
 const reader = @import("../reader.zig");
 const NodeMut = @import("NodeMut.zig");
 const Document = @import("../Document/root.zig").Document;
-const patch = @import("patch.zig");
+pub const patch = @import("patch.zig");
 
 /// Node and string storage owned by this document.
 storage: NodeMut.StorageMut,
@@ -94,7 +94,7 @@ pub fn toDocument(self: *DocumentMut, allocator: std.mem.Allocator) std.mem.Allo
 
 /// Applies an RFC 6902 JSON Patch to this document, atomically.
 ///
-/// It is `jsonz.dom.patch.apply` with this document as the target; a failed
+/// It is `DocumentMut.patch.apply` with this document as the target; a failed
 /// operation leaves the document unchanged.
 pub fn applyPatch(self: *DocumentMut, text: []const u8, options: patch.Options) patch.Error!void {
     return patch.apply(self, text, options);

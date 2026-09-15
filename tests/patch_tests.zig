@@ -3,7 +3,7 @@ const std = @import("std");
 const jsonz = @import("jsonz");
 
 const dom = jsonz.dom;
-const patch = dom.patch;
+const patch = dom.DocumentMut.patch;
 const testing = std.testing;
 
 test "patch: add" {

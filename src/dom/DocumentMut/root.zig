@@ -20,6 +20,8 @@ pub const PointerError = common.PointerError;
 pub const WriteOptions = common.WriteOptions;
 /// RFC 6902 JSON Patch.
 pub const patch = @import("patch.zig");
+/// Parses JSON straight into a mutable document.
+pub const parse = DocumentMut.parse;
 
 test {
     _ = @import("DocumentMut.zig");

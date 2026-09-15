@@ -8,6 +8,7 @@ const DocumentMut = @This();
 
 const std = @import("std");
 const common = @import("../common.zig");
+const reader = @import("../reader.zig");
 const NodeMut = @import("NodeMut.zig");
 
 /// Node and string storage owned by this document.
@@ -18,6 +19,28 @@ pub fn init(allocator: std.mem.Allocator) !DocumentMut {
     var storage: NodeMut.StorageMut = .{ .allocator = allocator };
     errdefer storage.nodes.deinit(allocator);
     storage.root = try NodeMut.createNull(&storage);
+    return .{ .storage = storage };
+}
+
+/// Parses `input` into a new mutable document.
+///
+/// It shares `../reader.zig` with `Document.parse` and builds linked nodes
+/// directly, so no compact tree is built in between.
+pub fn parse(
+    allocator: std.mem.Allocator,
+    input: []const u8,
+    options: reader.Options,
+) reader.Error!DocumentMut {
+    // Escape sequences are decoded in place, so the reader needs its own copy.
+    const buffer = try allocator.alloc(u8, input.len + 4);
+    defer allocator.free(buffer);
+    @memcpy(buffer[0..input.len], input);
+    @memset(buffer[input.len..], 0);
+
+    var storage: NodeMut.StorageMut = .{ .allocator = allocator };
+    errdefer storage.nodes.deinit(allocator);
+    errdefer storage.input.deinit(allocator);
+    storage.root = try NodeMut.parseInto(&storage, buffer, input.len, options);
     return .{ .storage = storage };
 }
 

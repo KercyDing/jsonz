@@ -10,6 +10,7 @@ const pool_mod = @import("../pool.zig");
 const common = @import("../common.zig");
 const encode = @import("../encode.zig");
 const rfc = @import("../rfc.zig");
+const reader = @import("../reader.zig");
 
 /// The kind of a DOM value.
 pub const Kind = common.Kind;
@@ -582,6 +583,92 @@ pub fn fromStorage(
 
     return storage;
 }
+
+/// Parses the JSON in `buffer[0..end]` into linked nodes in `storage` and
+/// returns the root index.
+///
+/// It shares `../reader.zig`'s scanner and state machine with the compact
+/// parser, but links every node as it is created, so no compact tree is built
+/// in between. `buffer` must have four readable zero bytes at
+/// `buffer[end..end + 4]`; its decoded strings are copied into `storage.input`,
+/// so the caller may free it afterwards.
+pub fn parseInto(
+    storage: *StorageMut,
+    buffer: []u8,
+    end: usize,
+    options: reader.Options,
+) reader.Error!u32 {
+    var parser: reader.Reader(Builder) = .{
+        .input = buffer[0 .. end + 4],
+        .end = end,
+        .options = options,
+        .sink = .{ .storage = storage, .input = buffer },
+    };
+    return parser.run();
+}
+
+/// The mutable builder: links every parsed node into the tree as it is created.
+const Builder = struct {
+    storage: *StorageMut,
+    /// The reader's padded input, whose string bytes are copied out.
+    input: []const u8,
+
+    pub inline fn append(
+        self: *Builder,
+        parent: ?u32,
+        tag: pool_mod.Tag,
+        payload: pool_mod.Payload,
+    ) reader.Error!u32 {
+        var node: NodeData = .{ .tag = tag, .payload = payload };
+        switch (NodeMut.nodeType(node)) {
+            .string => {
+                const start: usize = @intCast(node.payload.offset);
+                const bytes = self.input[start..][0..NodeMut.nodeLen(node)];
+                node.payload = .{ .offset = try storeString(self.storage, bytes) };
+            },
+            .array, .object => setChildren(&node, none, none),
+            else => {},
+        }
+        const index = try appendNode(self.storage, node);
+        if (parent) |parent_index| {
+            // While a container is being parsed its length holds the number of
+            // finished slots, which is also the new child's slot index: object
+            // members alternate key and value, so odd slots are values. They
+            // carry a tag bit so that `remove` can drop the whole member.
+            const parent_node = &self.storage.nodes.items[parent_index];
+            if (parent_node.tag.type == .object and parent_node.tag.len % 2 == 1) {
+                self.storage.nodes.items[index].tag.reserved |= member_value_bit;
+            }
+            parent_node.tag.len += 1;
+            linkChild(self.storage, parent_index, index);
+        }
+        return index;
+    }
+
+    /// Nothing to do: `append` already counted the child in its parent.
+    pub inline fn attach(self: *Builder, _: u32, _: u32, _: usize) void {
+        _ = self;
+    }
+
+    /// The container's parent, or the container itself when it is the root.
+    pub inline fn parentOf(self: *Builder, container: u32) u32 {
+        const parent = self.storage.nodes.items[container].parent;
+        return if (parent == none) container else parent;
+    }
+
+    pub inline fn nodeType(self: *Builder, node: u32) pool_mod.Type {
+        return self.storage.nodes.items[node].tag.type;
+    }
+
+    pub inline fn nodeLen(self: *Builder, node: u32) usize {
+        return self.storage.nodes.items[node].tag.len;
+    }
+
+    /// Records a finished container's length, keeping its child links.
+    pub inline fn finish(self: *Builder, container: u32, length: usize) void {
+        self.storage.nodes.items[container].tag.len = @intCast(length);
+    }
+};
 
 /// Appends `child` to the child list of the node at `parent_index`.
 fn linkChild(storage: *StorageMut, parent_index: u32, child: u32) void {

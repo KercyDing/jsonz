@@ -301,6 +301,96 @@ test "mutable conversion of deep documents" {
     try testing.expectEqual(@as(usize, 0), try node.len());
 }
 
+test "mutable parse matches the compact parser" {
+    for (valid_inputs) |input| try expectParseMutMatches(input, .{});
+    for (permissive_inputs) |entry| {
+        if (!try domAccepts(entry.input, entry.options)) continue;
+        try expectParseMutMatches(entry.input, entry.options);
+    }
+}
+
+/// `dom.parseMut` builds the same tree as `dom.parse` plus `toMut`.
+fn expectParseMutMatches(input: []const u8, options: dom.ParseOptions) !void {
+    var document = try dom.parse(testing.allocator, input, options);
+    defer document.deinit();
+    var converted = try document.toMut(testing.allocator);
+    defer converted.deinit();
+    var parsed = try dom.parseMut(testing.allocator, input, options);
+    defer parsed.deinit();
+
+    for ([_]bool{ false, true }) |pretty| {
+        const write_options: dom.WriteOptions = .{ .pretty = pretty };
+        const expected = try converted.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(expected);
+        const actual = try parsed.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(actual);
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "mutable parse of deep documents" {
+    const depth = 20_000;
+    const input = try testing.allocator.alloc(u8, depth * 2);
+    defer testing.allocator.free(input);
+    @memset(input[0..depth], '[');
+    @memset(input[depth..], ']');
+
+    var document = try dom.parseMut(testing.allocator, input, .{});
+    defer document.deinit();
+
+    var node = document.root();
+    var remaining: usize = depth - 1;
+    while (remaining != 0) : (remaining -= 1) node = try node.at(0);
+    try testing.expect(node.isArray());
+    try testing.expectEqual(@as(usize, 0), try node.len());
+
+    const output = try document.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(output);
+    try testing.expectEqualStrings(input, output);
+}
+
+test "mutable parse decodes strings and marks members" {
+    const input = "{\"k\":\"a\\u00e9\\n\\\"\\\\\",\"a\":1,\"b\":[2]}";
+    var document = try dom.parseMut(testing.allocator, input, .{});
+    defer document.deinit();
+
+    // Escapes are decoded in place before the string is stored.
+    const value = try (try document.root().field("k")).toString();
+    try testing.expectEqualStrings("a\u{e9}\n\"\\", value);
+
+    // Both parsers agree on the whole document.
+    var compact = try dom.parse(testing.allocator, input, .{});
+    defer compact.deinit();
+    const compact_text = try compact.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(compact_text);
+    try expectSerialized(&document, compact_text);
+
+    // The parser marks object values, so a member is removed with its key.
+    (try document.root().field("a")).remove();
+    try testing.expect(document.root().get("a") == null);
+
+    var expected_document = try dom.parse(
+        testing.allocator,
+        "{\"k\":\"a\\u00e9\\n\\\"\\\\\",\"b\":[2]}",
+        .{},
+    );
+    defer expected_document.deinit();
+    const expected = try expected_document.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(expected);
+    try expectSerialized(&document, expected);
+}
+
+test "mutable parse rejects invalid JSON" {
+    try testing.expectError(error.InvalidJson, dom.parseMut(testing.allocator, "", .{}));
+    try testing.expectError(error.InvalidJson, dom.parseMut(testing.allocator, "{\"a\":}", .{}));
+    try testing.expectError(error.InvalidJson, dom.parseMut(testing.allocator, "[1,]", .{}));
+    try testing.expectError(error.InvalidJson, dom.parseMut(testing.allocator, "1 2", .{}));
+
+    var document = try dom.parseMut(testing.allocator, "[1,]", .{ .allow_trailing_commas = true });
+    defer document.deinit();
+    try expectSerialized(&document, "[1]");
+}
+
 test "mutable serialization matches compact output" {
     for (valid_inputs) |input| {
         try expectMutMatches(input, .{});

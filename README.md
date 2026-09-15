@@ -4,8 +4,10 @@ A tiny, high-performance JSON library for Zig.
 
 - `jsonz.typed` provides native Zig serialization and deserialization for known
   schemas.
-- `jsonz.dom` provides a native DOM for arbitrary JSON, with
-  [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access.
+- `jsonz.dom` provides a native DOM for arbitrary JSON: a compact read-only
+  `Document` and an editable `DocumentMut`, with
+  [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access on
+  both.
 - `jsonz.diagnostic` reports the first JSON syntax error with its location.
 
 ## Install
@@ -86,9 +88,9 @@ const first_tag_view = try tags.at(0);
 const first_tag = try first_tag_view.toString();
 ```
 
-`DocView` is the only node type: object, array and scalar access all live on it.
-Use `get` and `getAt` for optional access; `field` and `at` return an error when
-the container kind is wrong or the element is missing.
+`Node` is a borrowed view into a `Document`. Object, array and scalar access
+all live on it. Use `get` and `getAt` for optional access; `field` and `at`
+return an error when the container kind is wrong or the element is missing.
 
 ```zig
 if (document.get("name")) |name| {
@@ -112,6 +114,46 @@ arguments, and `ptrGetDyn` a complete pointer known only at runtime:
 const user_view = try document.ptrGetFmt("/statuses/{d}/user", .{index});
 const other_view = try document.ptrGetDyn(pointer_from_user);
 ```
+
+### Mutable DOM
+
+`Document` is compact and read-only, which keeps parsing and querying fast.
+When a document has to change, copy it into a `DocumentMut` and edit that:
+
+```zig
+var mutable = try document.toMut(allocator);
+defer mutable.deinit();
+
+const root = mutable.root();
+try root.addString("name", "jsonz");
+try (try root.field("tags")).appendString("dom");
+(try root.field("age")).replaceNumber(@as(u8, 3));
+(try root.field("old")).remove();
+
+const edited = try mutable.toSlice(allocator, .{ .pretty = true });
+```
+
+`NodeMut` mirrors `Node` for reading, including `ptrGet`, and adds the editing
+methods. `DocumentMut` owns its nodes, so it borrows nothing from the caller and
+the original `Document` stays valid and unchanged.
+
+Editing methods split into three groups:
+
+- **In place** — `replaceNull`, `replaceBool`, `replaceNumber`, `replaceString`
+  change a node's value but keep its position.
+- **Structure** — `addField`, `addString`, `append`, `appendString`, `insertAt`
+  attach a node; `remove` detaches one; `replace` splices a detached node into
+  the node's own slot.
+- **Copy** — `copyFrom` deep-copies a subtree, including one from another
+  document.
+
+New nodes come from `DocumentMut.newNull` / `newBool` / `newNumber` /
+`newString` / `newArray` / `newObject`, and start out detached. Attaching a node
+that is already linked into a tree fails with `error.AlreadyAttached`, and a
+node from another document fails with `error.DifferentStorage`; use `copyFrom`
+to move data across documents.
+
+Editing never overflows the stack, however deep the document is.
 
 ### Diagnosing invalid JSON
 

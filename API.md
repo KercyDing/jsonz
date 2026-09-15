@@ -20,6 +20,7 @@ The owning entry points return a value with `deinit`. Call it exactly once.
 
 - `typed.parse` returns `Parsed(T)`.
 - `dom.parse` and `dom.parseInto` return `Document`.
+- `dom.Document.toMut` returns `DocumentMut`.
 
 `typed.parseBorrowed`, `typed.parseInto` and `dom.parseBufferSize` have no owner
 to release.
@@ -44,8 +45,11 @@ other.deinit(); // double release
 Values returned by views and strings decoded in place borrow the owner's
 storage.
 
-- `DocView` and the `[]const u8` returned by `toString` are only valid while
+- `Node` and the `[]const u8` returned by `toString` are only valid while
   the `Document` lives.
+- `NodeMut` and the `[]const u8` returned by `toString` are only valid while
+  the `DocumentMut` lives. A `DocumentMut` owns its nodes and strings, so it
+  borrows nothing from the caller.
 - `parseBorrowed` borrows unescaped strings directly from the input, which must
   outlive the value.
 - `parseInto` borrows caller-provided storage, which must outlive the value.
@@ -63,7 +67,7 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | Module | Purpose |
 | --- | --- |
 | `jsonz.typed` | Parse and serialize known Zig types. |
-| `jsonz.dom` | A DOM for arbitrary JSON documents. |
+| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy. |
 | `jsonz.diagnostic` | Report the first JSON syntax error. |
 
 ## Public types
@@ -75,14 +79,20 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | `typed.ParseError` | error set | Typed parse errors. |
 | `typed.SerializeOptions` | struct | Typed serialization options. |
 | `dom.Document` | owner | Owns parsed DOM storage. |
-| `dom.DocView` | view | A borrowed JSON node. |
-| `dom.DocView.ObjectIterator` | view | Iterator over object fields. |
-| `dom.DocView.ArrayIterator` | view | Iterator over array elements. |
-| `dom.DocView.ObjectEntry` | view | One `key`/`value` pair. |
+| `dom.Node` | view | A borrowed JSON node. |
+| `dom.Node.ObjectIterator` | view | Iterator over object fields. |
+| `dom.Node.ArrayIterator` | view | Iterator over array elements. |
+| `dom.Node.ObjectEntry` | view | One `key`/`value` pair. |
+| `dom.DocumentMut` | owner | Owns an editable DOM. |
+| `dom.NodeMut` | view | A borrowed handle to one node of a `DocumentMut`. |
+| `dom.NodeMut.ObjectIterator` | view | Iterator over object fields. |
+| `dom.NodeMut.ArrayIterator` | view | Iterator over array elements. |
+| `dom.NodeMut.ObjectEntry` | view | One `key`/`value` pair. |
 | `dom.Kind` | enum | `null`, `bool`, `number`, `string`, `array`, `object`. |
 | `dom.NumberType` | enum | Numeric targets for `toNumber` and `asNumber`. |
 | `dom.AccessError` | error set | Node access and conversion errors. |
 | `dom.PointerError` | error set | JSON Pointer resolution errors. |
+| `dom.MutateError` | error set | Structural edit errors. |
 | `dom.ParseOptions` | struct | DOM parse options. |
 | `dom.ParseError` | error set | DOM parse errors. |
 | `dom.WriteOptions` | struct | DOM serialization options. |
@@ -143,8 +153,9 @@ representations. See `src/typed/deserialize.zig`.
 | `dom.parse(allocator, input, options)` | `ParseError!Document` | Parse arbitrary JSON. |
 | `dom.parseInto(storage, input, options)` | `ParseError!Document` | Parse using caller-provided storage. |
 | `dom.parseBufferSize(input_len, options)` | `usize` | Storage size required by `parseInto`. |
-| `dom.toSlice(allocator, view, options)` | `![]u8` | Serialize a `DocView`. |
-| `dom.toWriter(writer, view, options)` | `!void` | Serialize a `DocView`. |
+| `dom.toSlice(allocator, view, options)` | `![]u8` | Serialize a `Node`. |
+| `dom.toWriter(writer, view, options)` | `!void` | Serialize a `Node`. |
+| `Document.toMut(allocator)` | `Allocator.Error!DocumentMut` | Copy into an editable document. |
 
 For workloads that parse many documents in one process,
 `std.heap.c_allocator` is recommended because it reuses freed heap blocks
@@ -154,6 +165,33 @@ efficiently. Link libc to use it:
 exe.root_module.link_libc = true;
 const allocator = std.heap.c_allocator;
 ```
+
+### Source layout
+
+`jsonz.dom` is two independent models over one shared vocabulary:
+
+```text
+src/dom/
+  root.zig          the jsonz.dom module: re-exports both models
+  common.zig        Kind, NumberType, AccessError, PointerError, WriteOptions, Storage
+  pool.zig          the compact node pool
+  reader.zig        the JSON reader shared by both models
+  rfc.zig           RFC 6901 JSON Pointer resolution
+  encode.zig        scalar encoding shared by both writers
+  Document/
+    root.zig        the read-only model's exports
+    Document.zig    the Document type: parse, access, pointer, serialize
+    Node.zig        the Node view and the storage it borrows
+    writer.zig      compact traversal
+  DocumentMut/
+    root.zig        the mutable model's exports
+    DocumentMut.zig the DocumentMut type: root, serialize, pointer, new*
+    NodeMut.zig     the linked node, its storage, edits and traversal
+```
+
+Each model is reached through its own `root.zig`; neither reaches into the
+other's internals. `DocumentMut` reads the compact storage through the shared
+`Storage`, so the conversion depends on shared types only.
 
 ### Parse options
 
@@ -180,7 +218,7 @@ const allocator = std.heap.c_allocator;
 | API | Purpose |
 | --- | --- |
 | `deinit()` | Release the DOM storage. |
-| `root()` | The root `DocView`. |
+| `root()` | The root `Node`. |
 | `kind()` | Kind of the root. |
 | `isNull()`, `isBool()`, `isNumber(.xxx)`, `isString()`, `isArray()`, `isObject()` | Root type checks. |
 | `len()` | Field or element count of a root container. |
@@ -191,6 +229,7 @@ const allocator = std.heap.c_allocator;
 | `objectIterator()`, `arrayIterator()` | Root container iteration. |
 | `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
+| `toMut(allocator)` | Copy the document into a new `DocumentMut`. |
 
 For caller-provided storage:
 
@@ -203,9 +242,9 @@ var document = try jsonz.dom.parseInto(storage, input, .{});
 defer document.deinit();
 ```
 
-### `DocView`
+### `Node`
 
-A `DocView` is the only node type; object, array and scalar operations live on
+A `Node` is the only node type; object, array and scalar operations live on
 it directly.
 
 Access:
@@ -227,10 +266,10 @@ Containers:
 
 | Method | Returns | Failure |
 | --- | --- | --- |
-| `get(key)` | `?DocView` | Not an object, or absent. |
-| `field(key)` | `AccessError!DocView` | Not an object, or absent. |
-| `getAt(index)` | `?DocView` | Not an array, or out of range. |
-| `at(index)` | `AccessError!DocView` | Not an array, or out of range. |
+| `get(key)` | `?Node` | Not an object, or absent. |
+| `field(key)` | `AccessError!Node` | Not an object, or absent. |
+| `getAt(index)` | `?Node` | Not an array, or out of range. |
+| `at(index)` | `AccessError!Node` | Not an array, or out of range. |
 | `objectIterator()` | `AccessError!ObjectIterator` | Not an object. |
 | `arrayIterator()` | `AccessError!ArrayIterator` | Not an array. |
 
@@ -240,12 +279,12 @@ Iteration:
 var fields = try view.objectIterator();
 while (fields.next()) |entry| {
     entry.key;   // []const u8
-    entry.value; // DocView
+    entry.value; // Node
 }
 
 var elements = try view.arrayIterator();
 while (elements.next()) |element| {
-    _ = element; // DocView
+    _ = element; // Node
 }
 ```
 
@@ -258,13 +297,69 @@ Serialization:
 
 Integer-to-floating-point conversion may lose precision.
 
+### `DocumentMut`
+
+`DocumentMut` is an independent, editable DOM. Get one with
+`Document.toMut(allocator)`: the copy is deep, the original `Document` stays
+valid and unchanged, and the two share nothing. Editing is in place and does
+not re-parse or re-serialize anything.
+
+| API | Purpose |
+| --- | --- |
+| `deinit()` | Release the node and string storage. |
+| `root()` | The root `NodeMut`. |
+| `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
+| `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer, with the same semantics as `Document`. |
+| `newNull()`, `newBool(value)`, `newNumber(value)`, `newString(value)`, `newArray()`, `newObject()` | Create a detached node to attach later. |
+
+`newNumber` takes a Zig integer or float: a signed integer is stored as a
+negative-capable number, an unsigned integer as an unsigned one, and a float as
+a real.
+
+### `NodeMut`
+
+`NodeMut` reads exactly like `Node`: `kind`, `is*`, `len`, `get`/`field`,
+`getAt`/`at`, `to*`/`as*`, `objectIterator`/`arrayIterator`, `ptrGet` /
+`ptrGetFmt` / `ptrGetDyn`, and `toSlice`/`toWriter` all exist with the same
+names, arguments, and errors. It adds the editing methods below.
+
+Detached nodes are what editors attach. Create them with the `DocumentMut.new*`
+methods. Every editing method takes the document's own storage as a given; a
+node from a different `DocumentMut` reports `error.DifferentStorage`.
+
+| Method | Effect |
+| --- | --- |
+| `replaceNull()` | Set this node to `null`, keeping its position. |
+| `replaceBool(value)` | Set this node to a boolean, keeping its position. |
+| `replaceNumber(value)` | Set this node to a number, keeping its position. |
+| `replaceString(value)` | Set this node to a string, keeping its position. |
+| `remove()` | Detach this node. An object member is removed with its key; the root and already-detached nodes are left alone. |
+| `replace(value)` | Splice a detached node into this node's position; this node becomes detached. |
+| `copyFrom(source)` | Deep-copy `source` into this node, keeping this node's position. `source` may belong to another document. |
+| `addField(key, value)` | Append an object member. |
+| `addString(key, value)` | Append an object member whose value is a string. |
+| `append(value)` | Append an array element. |
+| `appendString(value)` | Append a string array element. |
+| `insertAt(index, value)` | Insert an array element at `index`; `index == len` appends. |
+
+`replace*` and `remove` cannot fail beyond allocation in `replaceString`.
+`copyFrom` only returns allocation errors. The methods that attach a node
+return `MutateError`: `error.AlreadyAttached` when the node is still linked
+into a tree (including attaching an object to itself), `error.DifferentStorage`
+when it belongs to another document, `error.UnexpectedType` when the container
+kind is wrong, and `error.OutOfBounds` when an `insertAt` index is past the
+end. A failed attach leaves the document unchanged.
+
+`copyFrom` is iterative, so copying a very deep subtree cannot overflow the
+stack.
+
 ### JSON Pointer
 
 | API | Returns | Purpose |
 | --- | --- | --- |
-| `ptrGet("/user/id")` | `PointerError!DocView` | Comptime RFC 6901 pointer. |
-| `ptrGetFmt("/users/{}/id", .{index})` | `PointerError!DocView` | Comptime format plus runtime arguments. |
-| `ptrGetDyn(ptr)` | `PointerError!DocView` | A complete pointer known only at runtime. |
+| `ptrGet("/user/id")` | `PointerError!Node` | Comptime RFC 6901 pointer. |
+| `ptrGetFmt("/users/{}/id", .{index})` | `PointerError!Node` | Comptime format plus runtime arguments. |
+| `ptrGetDyn(ptr)` | `PointerError!Node` | A complete pointer known only at runtime. |
 
 `ptrGet` checks syntax, escapes and UTF-8 at compile time and splits tokens
 there. `ptrGetFmt` expands its format with `std.fmt` semantics into a fixed
@@ -353,6 +448,13 @@ so that stream decides; `toSlice` returns plain text.
 | `InvalidPointer` | Malformed pointer, invalid escape, or invalid UTF-8. |
 | `InvalidArrayIndex` | A token that is not an RFC 6901 array index. |
 | `PointerTooLong` | A `ptrGetFmt` result does not fit the stack buffer. |
+
+`MutateError` is `Allocator.Error` plus `AccessError` plus:
+
+| Value | Cause |
+| --- | --- |
+| `AlreadyAttached` | The node is already linked into a tree. |
+| `DifferentStorage` | The node belongs to another document. |
 
 `typed.ParseError`:
 

@@ -14,6 +14,10 @@ pub const Error = Document.ParseError || NodeMut.PointerError || NodeMut.MutateE
     InvalidPatch,
     /// The operation is not defined for the target location.
     InvalidTarget,
+    /// A `test` operation found a different value.
+    TestFailed,
+    /// `move` would move a value into its own child.
+    InvalidMove,
 };
 
 /// Options that control how a patch is read.
@@ -60,6 +64,9 @@ fn applyOp(document: *DocumentMut, operation: NodeMut) Error!void {
     if (std.mem.eql(u8, name, "add")) return add(document, path, try member(operation, "value"));
     if (std.mem.eql(u8, name, "remove")) return remove(document, path);
     if (std.mem.eql(u8, name, "replace")) return replace(document, path, try member(operation, "value"));
+    if (std.mem.eql(u8, name, "move")) return move(document, try stringMember(operation, "from"), path);
+    if (std.mem.eql(u8, name, "copy")) return copy(document, try stringMember(operation, "from"), path);
+    if (std.mem.eql(u8, name, "test")) return testValue(document, path, try member(operation, "value"));
     return error.InvalidPatch;
 }
 
@@ -158,6 +165,102 @@ fn replace(document: *DocumentMut, path: []const u8, value: NodeMut) Error!void 
         return existing.copyFrom(value);
     }
     return error.InvalidTarget;
+}
+
+/// Moves the value at `from` to `path`.
+fn move(document: *DocumentMut, from: []const u8, path: []const u8) Error!void {
+    if (from.len == 0) return error.InvalidTarget;
+    if (isProperPrefix(from, path)) return error.InvalidMove;
+    const source = try document.ptrGetDyn(from);
+    source.remove();
+    return add(document, path, source);
+}
+
+/// Copies the value at `from` to `path`.
+fn copy(document: *DocumentMut, from: []const u8, path: []const u8) Error!void {
+    return add(document, path, try document.ptrGetDyn(from));
+}
+
+/// Requires the value at `path` to equal `value`.
+fn testValue(document: *DocumentMut, path: []const u8, value: NodeMut) Error!void {
+    const actual = try document.ptrGetDyn(path);
+    if (!try eql(document.storage.allocator, actual, value)) return error.TestFailed;
+}
+
+/// Whether `prefix` is a proper prefix of `pointer`, which for `move` means the
+/// destination sits inside the value being moved.
+fn isProperPrefix(prefix: []const u8, pointer: []const u8) bool {
+    if (prefix.len >= pointer.len) return false;
+    if (!std.mem.startsWith(u8, pointer, prefix)) return false;
+    return prefix.len == 0 or pointer[prefix.len] == '/';
+}
+
+/// A pair of nodes still to compare.
+const Pair = struct { a: NodeMut, b: NodeMut };
+
+/// Structural equality as RFC 6902 defines it for `test`: numbers compare by
+/// value, object members are unordered, arrays are ordered.
+///
+/// Iterative, so a deeply nested value cannot overflow the stack.
+fn eql(allocator: std.mem.Allocator, a: NodeMut, b: NodeMut) Error!bool {
+    var stack: std.ArrayList(Pair) = .empty;
+    defer stack.deinit(allocator);
+    try stack.append(allocator, .{ .a = a, .b = b });
+
+    while (stack.pop()) |pair| {
+        const left = pair.a;
+        const right = pair.b;
+        if (left.kind() != right.kind()) return false;
+        switch (left.kind()) {
+            .null => {},
+            .bool => {
+                if (left.asBool().? != right.asBool().?) return false;
+            },
+            .number => {
+                if (!numberEql(left, right)) return false;
+            },
+            .string => {
+                if (!std.mem.eql(u8, left.asString().?, right.asString().?)) return false;
+            },
+            .array => {
+                if (try left.len() != try right.len()) return false;
+                var left_elements = try left.arrayIterator();
+                var right_elements = try right.arrayIterator();
+                while (left_elements.next()) |element| {
+                    try stack.append(allocator, .{ .a = element, .b = right_elements.next().? });
+                }
+            },
+            .object => {
+                if (try left.len() != try right.len()) return false;
+                var members = try left.objectIterator();
+                while (members.next()) |entry| {
+                    const match = right.get(entry.key) orelse return false;
+                    try stack.append(allocator, .{ .a = entry.value, .b = match });
+                }
+            },
+        }
+    }
+    return true;
+}
+
+/// Numeric equality: two integers compare exactly, and a real compares to an
+/// integer by value without rounding the integer through a float.
+fn numberEql(a: NodeMut, b: NodeMut) bool {
+    const a_integer = a.asNumber(.i128);
+    const b_integer = b.asNumber(.i128);
+    if (a_integer != null and b_integer != null) return a_integer.? == b_integer.?;
+    if (a_integer) |integer| return intAndRealEql(integer, b.asNumber(.f64) orelse return false);
+    if (b_integer) |integer| return intAndRealEql(integer, a.asNumber(.f64) orelse return false);
+    const a_real = a.asNumber(.f64) orelse return false;
+    const b_real = b.asNumber(.f64) orelse return false;
+    return a_real == b_real;
+}
+
+fn intAndRealEql(integer: i128, real: f64) bool {
+    if (real != @trunc(real)) return false;
+    if (real < @as(f64, @floatFromInt(std.math.minInt(i128)))) return false;
+    if (real >= @as(f64, @floatFromInt(std.math.maxInt(i128)))) return false;
+    return @as(i128, @intFromFloat(real)) == integer;
 }
 
 /// Decodes a pointer token, borrowing `token` itself when it holds no escape

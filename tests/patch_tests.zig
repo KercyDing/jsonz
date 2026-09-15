@@ -63,6 +63,101 @@ test "patch: replace" {
     try expectPatchFailure(error.InvalidTarget, "{\"a\":1}", "[{\"op\":\"replace\",\"path\":\"/a/b\",\"value\":1}]");
 }
 
+test "patch: move" {
+    try expectPatched("{\"b\":2,\"c\":1}", "{\"a\":1,\"b\":2}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/c\"}]");
+    // Removing first shifts the array, so the value lands at the given index.
+    try expectPatched("[2,3,1]", "[1,2,3]", "[{\"op\":\"move\",\"from\":\"/0\",\"path\":\"/2\"}]");
+    try expectPatched("[-1,1,2]", "[1,2,-1]", "[{\"op\":\"move\",\"from\":\"/2\",\"path\":\"/0\"}]");
+    // A subtree moves as a whole.
+    try expectPatched(
+        "{\"a\":{},\"b\":{\"y\":1}}",
+        "{\"a\":{\"x\":1},\"b\":{}}",
+        "[{\"op\":\"move\",\"from\":\"/a/x\",\"path\":\"/b/y\"}]",
+    );
+    // Moving onto the same location is allowed, and so is moving to the root.
+    try expectPatched("{\"a\":1}", "{\"a\":1}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/a\"}]");
+    try expectPatched("[1]", "{\"a\":[1]}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"\"}]");
+
+    try expectPatchFailure(error.InvalidMove, "{\"a\":{\"b\":1}}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/a/b\"}]");
+    try expectPatchFailure(error.InvalidMove, "{\"a\":1}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/a/c\"}]");
+    // A different member that merely starts with the same text is not a child.
+    try expectPatched("{\"a\":1,\"ab\":1}", "{\"a\":1,\"ab\":0}", "[{\"op\":\"replace\",\"path\":\"/ab\",\"value\":1}]");
+    try expectPatchFailure(error.InvalidTarget, "{\"a\":1}", "[{\"op\":\"move\",\"from\":\"\",\"path\":\"/b\"}]");
+    try expectPatchFailure(error.MissingField, "{}", "[{\"op\":\"move\",\"from\":\"/a\",\"path\":\"/b\"}]");
+    try expectPatchFailure(error.InvalidPatch, "{}", "[{\"op\":\"move\",\"path\":\"/b\"}]");
+}
+
+test "patch: copy" {
+    try expectPatched("{\"a\":1,\"b\":1}", "{\"a\":1}", "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"/b\"}]");
+    try expectPatched("[1,2,1]", "[1,2]", "[{\"op\":\"copy\",\"from\":\"/0\",\"path\":\"/-\"}]");
+
+    // The copy is independent: editing it leaves the source alone.
+    try expectPatched(
+        "{\"a\":[1],\"b\":[9,1]}",
+        "{\"a\":[1]}",
+        "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"/b\"},{\"op\":\"add\",\"path\":\"/b/0\",\"value\":9}]",
+    );
+    // Copying into the source's own child is allowed, unlike `move`.
+    try expectPatched(
+        "{\"a\":{\"b\":{\"b\":1}}}",
+        "{\"a\":{\"b\":1}}",
+        "[{\"op\":\"copy\",\"from\":\"/a\",\"path\":\"/a/b\"}]",
+    );
+
+    try expectPatchFailure(error.MissingField, "{}", "[{\"op\":\"copy\",\"from\":\"/x\",\"path\":\"/y\"}]");
+    try expectPatchFailure(error.InvalidPatch, "{}", "[{\"op\":\"copy\",\"path\":\"/y\"}]");
+}
+
+test "patch: test" {
+    try expectPatched("{\"a\":1}", "{\"a\":1}", "[{\"op\":\"test\",\"path\":\"/a\",\"value\":1}]");
+    try expectPatched("{\"a/b\":1}", "{\"a/b\":1}", "[{\"op\":\"test\",\"path\":\"/a~1b\",\"value\":1}]");
+
+    // Numbers compare by value, whatever their representation.
+    try expectPatched("1", "1", "[{\"op\":\"test\",\"path\":\"\",\"value\":1.0}]");
+    try expectPatched("1.0", "1.0", "[{\"op\":\"test\",\"path\":\"\",\"value\":1}]");
+    try expectPatched("-0.0", "-0.0", "[{\"op\":\"test\",\"path\":\"\",\"value\":0}]");
+    // Big integers stay exact.
+    try expectPatched(
+        "9007199254740993",
+        "9007199254740993",
+        "[{\"op\":\"test\",\"path\":\"\",\"value\":9007199254740993}]",
+    );
+
+    // Object members are unordered, arrays are ordered.
+    try expectPatched(
+        "{\"a\":1,\"b\":2}",
+        "{\"a\":1,\"b\":2}",
+        "[{\"op\":\"test\",\"path\":\"\",\"value\":{\"b\":2,\"a\":1}}]",
+    );
+
+    try expectPatchFailure(error.TestFailed, "[1,2]", "[{\"op\":\"test\",\"path\":\"\",\"value\":[2,1]}]");
+    try expectPatchFailure(error.TestFailed, "{\"a\":1}", "[{\"op\":\"test\",\"path\":\"/a\",\"value\":2}]");
+    try expectPatchFailure(error.TestFailed, "1", "[{\"op\":\"test\",\"path\":\"\",\"value\":true}]");
+    try expectPatchFailure(error.TestFailed, "1", "[{\"op\":\"test\",\"path\":\"\",\"value\":1.5}]");
+    try expectPatchFailure(error.TestFailed, "{\"a\":1}", "[{\"op\":\"test\",\"path\":\"\",\"value\":{\"a\":1,\"b\":2}}]");
+    try expectPatchFailure(error.TestFailed, "9007199254740993", "[{\"op\":\"test\",\"path\":\"\",\"value\":9007199254740992}]");
+    try expectPatchFailure(error.MissingField, "{}", "[{\"op\":\"test\",\"path\":\"/a\",\"value\":1}]");
+}
+
+test "patch: test on deep values" {
+    const depth = 20_000;
+    const nested = try testing.allocator.alloc(u8, depth * 2);
+    defer testing.allocator.free(nested);
+    @memset(nested[0..depth], '[');
+    @memset(nested[depth..], ']');
+
+    const text = try std.fmt.allocPrint(
+        testing.allocator,
+        "[{{\"op\":\"test\",\"path\":\"\",\"value\":{s}}}]",
+        .{nested},
+    );
+    defer testing.allocator.free(text);
+
+    var mutable = try mutableFrom(nested);
+    defer mutable.deinit();
+    try patch.apply(testing.allocator, &mutable, text, .{});
+}
+
 test "patch: malformed patches" {
     // Not a JSON array, or an element that is not an operation object.
     try expectPatchFailure(error.InvalidPatch, "{}", "{\"op\":\"remove\",\"path\":\"/a\"}");

@@ -1,13 +1,15 @@
 # jsonz
 
-A tiny, high-performance JSON library for Zig.
+A high-performance JSON document library for Zig.
 
-- `jsonz.typed` provides native Zig serialization and deserialization for known
-  schemas.
 - `jsonz.dom` provides a native DOM for arbitrary JSON: a compact read-only
   `Document` and an editable `DocumentMut`, with
   [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access on
   both.
+- `jsonz.typed` provides native Zig serialization and deserialization for known
+  schemas.
+- `jsonz.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/)
+  JSON Patch to an editable document.
 - `jsonz.diagnostic` reports the first JSON syntax error with its location.
 
 ## Install
@@ -154,6 +156,36 @@ node from another document fails with `error.DifferentStorage`; use `copyFrom`
 to move data across documents.
 
 Editing never overflows the stack, however deep the document is.
+
+A document can also be parsed straight into a mutable one, without building a
+compact tree first:
+
+```zig
+var mutable = try jsonz.dom.parseMut(allocator, input, .{});
+defer mutable.deinit();
+```
+
+### JSON Patch
+
+`jsonz.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/)
+patches to a `DocumentMut`:
+
+```zig
+const patch =
+    \\[
+    \\  {"op": "test", "path": "/name", "value": "jsonz"},
+    \\  {"op": "replace", "path": "/name", "value": "jsonz dom"},
+    \\  {"op": "add", "path": "/tags/-", "value": "dom"}
+    \\]
+;
+
+try jsonz.patch.apply(allocator, &mutable, patch, .{});
+```
+
+`apply` is atomic: when an operation fails, the document is left untouched. All
+six operations are supported: `add`, `remove`, `replace`, `move`, `copy` and
+`test`. `applyOps` applies an already parsed patch in place instead, which
+skips the extra copy but keeps the operations that ran before a failure.
 
 ### Diagnosing invalid JSON
 

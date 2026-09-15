@@ -155,8 +155,6 @@ representations. See `src/typed/deserialize.zig`.
 | `dom.parse(allocator, input, options)` | `ParseError!Document` | Parse arbitrary JSON. |
 | `dom.parseInto(storage, input, options)` | `ParseError!Document` | Parse using caller-provided storage. |
 | `dom.parseBufferSize(input_len, options)` | `usize` | Storage size required by `parseInto`. |
-| `dom.toSlice(allocator, view, options)` | `![]u8` | Serialize a `Node`. |
-| `dom.toWriter(writer, view, options)` | `!void` | Serialize a `Node`. |
 | `Document.toMut(allocator)` | `Allocator.Error!DocumentMut` | Copy into an editable document. |
 | `dom.parseMut(allocator, input, options)` | `ParseError!DocumentMut` | Parse straight into an editable document. |
 

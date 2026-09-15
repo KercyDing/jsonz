@@ -254,7 +254,7 @@ pub fn toWriter(
     return writer_mod.toWriter(writer, self, options);
 }
 
-pub inline fn getObjectUnchecked(self: Node, key: []const u8) ?Node {
+inline fn getObjectUnchecked(self: Node, key: []const u8) ?Node {
     const count = pool_mod.nodeLen(self.raw().*);
     var cursor = self.index + 1;
     for (0..count) |_| {

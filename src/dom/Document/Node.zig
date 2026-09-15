@@ -17,8 +17,8 @@ const AccessError = common.AccessError;
 const PointerError = common.PointerError;
 /// Numeric types accepted by `Node.toNumber` and `Node.asNumber`.
 const NumberType = common.NumberType;
-/// The parsed storage behind every `Node`.
-pub const Storage = common.Storage;
+/// The parsed storage behind every `Node`; the type of the `storage` field.
+const Storage = common.Storage;
 storage: *const Storage,
 index: u32,
 

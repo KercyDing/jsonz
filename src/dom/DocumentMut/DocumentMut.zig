@@ -68,20 +68,6 @@ pub fn parse(
     return .{ .storage = storage };
 }
 
-/// Constructor internals. They take the storage layout apart, so they are not
-/// part of the documented API: `Document.toMut` and `DocumentMut.parse` are the
-/// entry points that users need.
-pub const internal = struct {
-    /// Copies a compact read-only tree into a new mutable document.
-    pub fn fromStorage(
-        allocator: std.mem.Allocator,
-        source: *const common.Storage,
-        root_index: u32,
-    ) !DocumentMut {
-        return .{ .storage = try storage_mod.fromStorage(allocator, source, root_index) };
-    }
-};
-
 /// Deep-copies `source` into a new document; the copy shares nothing with it.
 pub fn clone(allocator: std.mem.Allocator, source: *DocumentMut) !DocumentMut {
     var copy = try initEmpty(allocator);

@@ -250,6 +250,38 @@ config.json:3:18: error: expected ',' or ']', found '"'
 5 | }
 ```
 
+## Thread safety
+
+`Document` is immutable once parsed, so it can be shared across threads: `Node`
+views borrow `*const Storage`, and nothing in the read-only API writes to the
+document. The owner still decides when `deinit` runs, so readers must be done
+before it does.
+
+`DocumentMut` owns mutable state and is not thread-safe. It does no locking, and
+a `NodeMut` handle can write through the document's storage, so sharing one
+between threads needs synchronization from the caller.
+
+The usual shape is to edit through a `DocumentMut` and publish immutable
+snapshots as `Document`s. `toDocument` returns a deep copy that shares nothing
+with the source, so readers on other threads are unaffected by later edits:
+
+```zig
+var mutable = try jsonz.dom.parseMut(allocator, input, .{});
+defer mutable.deinit();
+
+const root = mutable.root();
+try root.addString("state", "ready");
+
+// Hand this to whoever reads it; the editor keeps working.
+var snapshot = try mutable.toDocument(allocator);
+defer snapshot.deinit();
+```
+
+Two documents share nothing, so every thread can hold its own; the allocator you
+hand them is the only shared object, and it follows its own thread-safety rules.
+`jsonz.typed` and `jsonz.diagnostic` keep no state at all: they read their input
+and write their output.
+
 ## API
 
 See [API.md](API.md) for the full API reference: options, types, methods and

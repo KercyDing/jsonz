@@ -81,12 +81,12 @@ const input =
 var document = try jsonz.dom.parse(allocator, input, .{});
 defer document.deinit();
 
-const name_view = try document.field("name");
-const name = try name_view.toString();
+const name_node = try document.field("name");
+const name = try name_node.toString();
 
 const tags = try document.field("tags");
-const first_tag_view = try tags.at(0);
-const first_tag = try first_tag_view.toString();
+const first_tag_node = try tags.at(0);
+const first_tag = try first_tag_node.toString();
 ```
 
 `Node` is a borrowed view into a `Document`. Object, array and scalar access
@@ -104,22 +104,23 @@ if (document.get("name")) |name| {
 Reach nested values with an RFC 6901 JSON Pointer:
 
 ```zig
-const id_view = try document.ptrGet("/user/profile/id");
-const id = try id_view.toNumber(.u64);
+const id_node = try document.ptrGet("/user/profile/id");
+const id = try id_node.toNumber(.u64);
 ```
 
 `ptrGet` takes a comptime pointer, `ptrGetFmt` a comptime format with runtime
 arguments, and `ptrGetDyn` a complete pointer known only at runtime:
 
 ```zig
-const user_view = try document.ptrGetFmt("/statuses/{d}/user", .{index});
-const other_view = try document.ptrGetDyn(pointer_from_user);
+const user_node = try document.ptrGetFmt("/statuses/{d}/user", .{index});
+const other_node = try document.ptrGetDyn(pointer_from_user);
 ```
 
 ### Mutable DOM
 
 `Document` is compact and read-only, which keeps parsing and querying fast.
-When a document has to change, copy it into a `DocumentMut` and edit that:
+When a document has to change, copy it into a `DocumentMut` — or parse straight
+into one with `jsonz.dom.parseMut` — and edit that:
 
 ```zig
 var mutable = try document.toMut(allocator);
@@ -145,12 +146,8 @@ const edited = try mutable.toSlice(allocator, .{ .pretty = true });
 
 `NodeMut` is a handle to one node of the document: taking one copies nothing,
 and every edit goes through the document it came from. Reading works exactly
-like `Node`, JSON Pointer included:
-
-```zig
-const name = try mutable.ptrGet("/user/name");
-try name.replaceString("jsonz");
-```
+like `Node`, JSON Pointer included, so an edited value can be reached with
+`mutable.ptrGet("/user/name")` just as it can be with `document.ptrGet(...)`.
 
 `DocumentMut` owns its nodes, so it borrows nothing from the caller and the
 original `Document` stays valid and unchanged.
@@ -178,26 +175,12 @@ not reclaim its nodes, so a detached subtree stays valid, keeps accepting
 edits, and can be attached somewhere else. `deinit` releases everything the
 document allocated, so call it when the document's lifecycle ends.
 
-`toDocument` freezes an edited document into a compact, read-only one:
-
-```zig
-var frozen = try mutable.toDocument(allocator);
-defer frozen.deinit();
-```
-
-A `Node` borrows `*const Storage`, so a `*const Document` has no mutating API
-at all, while a `DocumentMut` cannot even be read through a constant pointer.
-Give the frozen form to whoever must not be able to change it.
+`toDocument` freezes an edited document into a compact, read-only one. A `Node`
+borrows `*const Storage`, so a `*const Document` has no mutating API at all,
+while a `DocumentMut` cannot even be read through a constant pointer; give the
+frozen form to whoever must not be able to change it.
 
 Editing never overflows the stack, however deep the document is.
-
-A document can also be parsed straight into a mutable one, without building a
-compact tree first:
-
-```zig
-var mutable = try jsonz.dom.parseMut(allocator, input, .{});
-defer mutable.deinit();
-```
 
 ### JSON Patch
 
@@ -263,19 +246,7 @@ between threads needs synchronization from the caller.
 
 The usual shape is to edit through a `DocumentMut` and publish immutable
 snapshots as `Document`s. `toDocument` returns a deep copy that shares nothing
-with the source, so readers on other threads are unaffected by later edits:
-
-```zig
-var mutable = try jsonz.dom.parseMut(allocator, input, .{});
-defer mutable.deinit();
-
-const root = mutable.root();
-try root.addString("state", "ready");
-
-// Hand this to whoever reads it; the editor keeps working.
-var snapshot = try mutable.toDocument(allocator);
-defer snapshot.deinit();
-```
+with the source, so readers on other threads are unaffected by later edits.
 
 Two documents share nothing, so every thread can hold its own; the allocator you
 hand them is the only shared object, and it follows its own thread-safety rules.

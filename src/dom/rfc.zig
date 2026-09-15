@@ -1,4 +1,4 @@
-//! RFC 6901 JSON Pointer resolution over a DOM view.
+//! RFC 6901 JSON Pointer resolution over a DOM tree.
 //!
 //! A pointer is a sequence of `/`-separated reference tokens; the empty string
 //! selects the root. `~1` decodes to `/` and `~0` to `~`. Whether a token is an

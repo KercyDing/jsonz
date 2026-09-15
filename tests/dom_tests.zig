@@ -235,8 +235,8 @@ test "json pointer format" {
     defer doc.deinit();
 
     const index: usize = 0;
-    const id_view = try doc.ptrGetFmt("/statuses/{}/user/id", .{index});
-    try testing.expectEqual(@as(u8, 11), try id_view.toNumber(.u8));
+    const id_node = try doc.ptrGetFmt("/statuses/{}/user/id", .{index});
+    try testing.expectEqual(@as(u8, 11), try id_node.toNumber(.u8));
 
     try testing.expectError(error.OutOfBounds, doc.ptrGetFmt("/statuses/{}/user/id", .{@as(usize, 7)}));
 

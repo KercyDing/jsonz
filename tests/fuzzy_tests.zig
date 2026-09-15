@@ -558,12 +558,12 @@ fn fuzzPointer(context: PointerFuzz, smith: *std.testing.Smith) !void {
     const actual = context.document.ptrGetDyn(pointer.items);
 
     if (expected) |value| {
-        const view = actual catch |failure| {
+        const node = actual catch |failure| {
             std.debug.print("jsonz rejected valid pointer {s}: {s}\n", .{ pointer.items, @errorName(failure) });
             return error.TestUnexpectedResult;
         };
         const expected_kind = referenceKind(value);
-        const actual_kind = documentKind(view.kind());
+        const actual_kind = documentKind(node.kind());
         if (expected_kind != actual_kind) {
             std.debug.print("pointer {s} kind mismatch: {s} != {s}\n", .{
                 pointer.items,
@@ -572,8 +572,8 @@ fn fuzzPointer(context: PointerFuzz, smith: *std.testing.Smith) !void {
             });
             return error.TestUnexpectedResult;
         }
-    } else if (actual) |view| {
-        std.debug.print("jsonz accepted pointer {s} -> {s}\n", .{ pointer.items, @tagName(view.kind()) });
+    } else if (actual) |node| {
+        std.debug.print("jsonz accepted pointer {s} -> {s}\n", .{ pointer.items, @tagName(node.kind()) });
         return error.TestUnexpectedResult;
     } else |_| {}
 }

@@ -311,8 +311,12 @@ pub fn replaceBool(self: NodeMut, value: bool) void {
 }
 
 /// Replaces this node's value with a number, keeping its position.
-pub fn replaceNumber(self: NodeMut, value: anytype) void {
-    const scalar = numberScalar(value);
+///
+/// Numbers are stored as `i64`, `u64`, or `f64`, so an integer that does not
+/// fit reports `error.OutOfRange`; so does a float that JSON cannot carry, like
+/// a NaN or an infinity.
+pub fn replaceNumber(self: NodeMut, value: anytype) AccessError!void {
+    const scalar = try numberScalar(value);
     setValue(self.raw(), scalar.tag, scalar.payload);
 }
 
@@ -816,7 +820,7 @@ pub fn createBool(storage: *StorageMut, value: bool) !u32 {
 
 /// Creates a detached number node.
 pub fn createNumber(storage: *StorageMut, value: anytype) !u32 {
-    const scalar = numberScalar(value);
+    const scalar = try numberScalar(value);
     return appendNode(storage, .{ .tag = scalar.tag, .payload = scalar.payload });
 }
 
@@ -842,30 +846,35 @@ pub fn createObject(storage: *StorageMut) !u32 {
 const Scalar = struct { tag: pool_mod.Tag, payload: pool_mod.Payload };
 
 /// Packs a Zig integer or float into a number node's tag and payload.
-inline fn numberScalar(value: anytype) Scalar {
+inline fn numberScalar(value: anytype) common.AccessError!Scalar {
     switch (@typeInfo(@TypeOf(value))) {
-        .float, .comptime_float => return .{
-            .tag = pool_mod.makeTag(.number, .real, 0),
-            .payload = .{ .float = @floatCast(value) },
+        .float, .comptime_float => {
+            const number: f64 = @floatCast(value);
+            // JSON has no NaN or infinity, so neither does a document.
+            if (!std.math.isFinite(number)) return error.OutOfRange;
+            return .{
+                .tag = pool_mod.makeTag(.number, .real, 0),
+                .payload = .{ .float = number },
+            };
         },
         .comptime_int => {
             if (value < 0) return .{
                 .tag = pool_mod.makeTag(.number, pool_mod.sint, 0),
-                .payload = .{ .int = @intCast(value) },
+                .payload = .{ .int = std.math.cast(i64, value) orelse return error.OutOfRange },
             };
             return .{
                 .tag = pool_mod.makeTag(.number, pool_mod.uint, 0),
-                .payload = .{ .uint = @intCast(value) },
+                .payload = .{ .uint = std.math.cast(u64, value) orelse return error.OutOfRange },
             };
         },
         .int => |info| {
             if (info.signedness == .signed) return .{
                 .tag = pool_mod.makeTag(.number, pool_mod.sint, 0),
-                .payload = .{ .int = @intCast(value) },
+                .payload = .{ .int = std.math.cast(i64, value) orelse return error.OutOfRange },
             };
             return .{
                 .tag = pool_mod.makeTag(.number, pool_mod.uint, 0),
-                .payload = .{ .uint = @intCast(value) },
+                .payload = .{ .uint = std.math.cast(u64, value) orelse return error.OutOfRange },
             };
         },
         else => @compileError("expected an integer or a float"),

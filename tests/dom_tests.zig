@@ -482,9 +482,19 @@ test "mutable edits" {
     // In-place scalar replacement keeps the node's position.
     const a = try root.field("a");
     try a.replaceString("hi");
-    a.replaceNumber(@as(u8, 7));
+    try a.replaceNumber(@as(u8, 7));
     a.replaceBool(true);
-    a.replaceNumber(@as(f64, -1.5));
+    try a.replaceNumber(@as(f64, -1.5));
+    a.replaceNull();
+
+    // Numbers are stored as i64, u64 or f64, so anything else is reported.
+    try a.replaceNumber(std.math.maxInt(u64));
+    try a.replaceNumber(std.math.minInt(i64));
+    try testing.expectError(error.OutOfRange, a.replaceNumber(@as(u128, 1) << 100));
+    try testing.expectError(error.OutOfRange, a.replaceNumber(@as(i128, -1) << 100));
+    // A NaN or an infinity is not JSON, so it must never reach the writer.
+    try testing.expectError(error.OutOfRange, a.replaceNumber(std.math.inf(f64)));
+    try testing.expectError(error.OutOfRange, a.replaceNumber(std.math.nan(f64)));
     a.replaceNull();
 
     // Attach detached nodes and inline strings.

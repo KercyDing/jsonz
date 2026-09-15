@@ -10,6 +10,7 @@ const std = @import("std");
 const common = @import("../common.zig");
 const reader = @import("../reader.zig");
 const NodeMut = @import("NodeMut.zig");
+const Document = @import("../Document/root.zig").Document;
 const patch = @import("patch.zig");
 
 /// Node and string storage owned by this document.
@@ -72,6 +73,23 @@ pub fn deinit(self: *DocumentMut) void {
 /// Returns a handle to the document's root node.
 pub fn root(self: *DocumentMut) NodeMut {
     return .{ .storage = &self.storage, .index = self.storage.root };
+}
+
+/// Copies this document into a compact read-only `Document`.
+///
+/// The copy is deep and independent, so it stays valid after this document is
+/// freed. Freezing an edited document is how it is shared for reading: `Node`
+/// borrows `*const Storage`, so a `*const Document` has no mutating API at all,
+/// while a `DocumentMut` cannot even be read through a constant pointer.
+pub fn toDocument(self: *DocumentMut, allocator: std.mem.Allocator) std.mem.Allocator.Error!Document {
+    const compact = try NodeMut.toCompact(&self.storage, self.storage.root, allocator);
+    var document: Document = .{
+        .pool = compact.pool,
+        .storage = .{ .nodes = &.{}, .input = compact.input },
+        .root_index = compact.root_index,
+    };
+    document.storage.nodes = document.pool.items();
+    return document;
 }
 
 /// Applies an RFC 6902 JSON Patch to this document, atomically.

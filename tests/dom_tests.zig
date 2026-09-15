@@ -391,6 +391,82 @@ test "mutable parse rejects invalid JSON" {
     try expectSerialized(&document, "[1]");
 }
 
+test "mutable freeze matches the mutable document" {
+    for (valid_inputs) |input| try expectFreezeMatches(input, .{});
+    for (permissive_inputs) |entry| {
+        if (!try domAccepts(entry.input, entry.options)) continue;
+        try expectFreezeMatches(entry.input, entry.options);
+    }
+}
+
+/// `DocumentMut -> toDocument` must serialize exactly like its source.
+fn expectFreezeMatches(input: []const u8, options: dom.ParseOptions) !void {
+    var mutable = try dom.parseMut(testing.allocator, input, options);
+    defer mutable.deinit();
+    var frozen = try mutable.toDocument(testing.allocator);
+    defer frozen.deinit();
+
+    for ([_]bool{ false, true }) |pretty| {
+        const write_options: dom.WriteOptions = .{ .pretty = pretty };
+        const expected = try mutable.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(expected);
+        const actual = try frozen.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(actual);
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "mutable freeze is independent and readable" {
+    var mutable = try dom.parseMut(testing.allocator, "{\"a\":[1,2],\"b\":1,\"foo\":1,\"foo\":2}", .{});
+    defer mutable.deinit();
+
+    // Edit, and drop a member that only the mutable document still stores.
+    try (try mutable.ptrGet("/a")).appendNumber(@as(u8, 3));
+    (try mutable.ptrGet("/b")).remove();
+
+    var frozen = try mutable.toDocument(testing.allocator);
+    defer frozen.deinit();
+
+    // The frozen copy holds what the tree held: duplicate members included, and
+    // no trace of the detached one.
+    try expectDocumentJson(&frozen, "{\"a\":[1,2,3],\"foo\":1,\"foo\":2}");
+    try testing.expectEqual(@as(u8, 1), try (try frozen.ptrGet("/foo")).toNumber(.u8));
+
+    // It is a deep copy: later edits do not reach it.
+    try (try mutable.ptrGet("/a")).appendNumber(@as(u8, 4));
+    try (try mutable.ptrGet("/a/0")).replaceNumber(@as(u8, 9));
+    try expectDocumentJson(&frozen, "{\"a\":[1,2,3],\"foo\":1,\"foo\":2}");
+
+    // And it reads like any compact document.
+    var iterator = try (try frozen.field("a")).arrayIterator();
+    var sum: u64 = 0;
+    while (iterator.next()) |element| sum += try element.toNumber(.u64);
+    try testing.expectEqual(@as(u64, 6), sum);
+}
+
+test "mutable freeze of deep documents" {
+    const depth = 20_000;
+    const input = try testing.allocator.alloc(u8, depth * 2);
+    defer testing.allocator.free(input);
+    @memset(input[0..depth], '[');
+    @memset(input[depth..], ']');
+
+    var mutable = try dom.parseMut(testing.allocator, input, .{});
+    defer mutable.deinit();
+    var frozen = try mutable.toDocument(testing.allocator);
+    defer frozen.deinit();
+
+    const output = try frozen.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(output);
+    try testing.expectEqualStrings(input, output);
+
+    var node = frozen.root();
+    var remaining: usize = depth - 1;
+    while (remaining != 0) : (remaining -= 1) node = try node.at(0);
+    try testing.expect(node.isArray());
+    try testing.expectEqual(@as(usize, 0), try node.len());
+}
+
 test "mutable serialization matches compact output" {
     for (valid_inputs) |input| {
         try expectMutMatches(input, .{});
@@ -759,6 +835,12 @@ test "mutable document lifecycle" {
     try (try copy.root().field("k")).replaceString("other");
     try expectSerialized(&copy, "{\"k\":\"other\"}");
     try expectSerialized(&document, "{\"k\":\"v\"}");
+}
+
+fn expectDocumentJson(document: *dom.Document, expected: []const u8) !void {
+    const output = try document.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(output);
+    try testing.expectEqualStrings(expected, output);
 }
 
 fn expectSerialized(document: *dom.DocumentMut, expected: []const u8) !void {

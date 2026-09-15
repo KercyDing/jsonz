@@ -633,6 +633,112 @@ pub fn fromStorage(
     return storage;
 }
 
+/// A compact copy of a mutable tree: a depth-first node pool plus the string
+/// pool its offsets refer to. Both are owned by the allocator that made them.
+pub const Compact = struct {
+    /// The compact nodes, ready for a `Document`.
+    pool: pool_mod.Pool,
+    /// The decoded strings the nodes point into.
+    input: []u8,
+    /// The index of the copied root inside `pool`.
+    root_index: u32,
+
+    /// Releases the node pool and the string pool.
+    pub fn deinit(self: *Compact, allocator: std.mem.Allocator) void {
+        allocator.free(self.pool.buffer);
+        allocator.free(self.input);
+    }
+};
+
+/// Copies the tree at `root` into a compact depth-first pool.
+///
+/// The mutable string pool already has the layout a compact document wants, so
+/// it is copied once and the nodes keep their offsets. The copy is iterative,
+/// so a deep tree cannot overflow the stack.
+pub fn toCompact(
+    storage: *const StorageMut,
+    root: u32,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Compact {
+    const source = storage.nodes.items;
+    const root_node = source[root];
+
+    const input = try allocator.dupe(u8, storage.input.items);
+    errdefer allocator.free(input);
+
+    var nodes: std.ArrayList(pool_mod.NodeData) = .empty;
+    errdefer nodes.deinit(allocator);
+    try nodes.ensureTotalCapacity(allocator, source.len);
+    try nodes.append(allocator, compactNode(root_node));
+
+    var stack: std.ArrayList(CompactFrame) = .empty;
+    defer stack.deinit(allocator);
+    if (childSlots(root_node)) |slots| {
+        try stack.ensureTotalCapacity(allocator, 32);
+        try stack.append(allocator, .{ .source = head(root_node), .remaining = slots, .index = 0 });
+    }
+
+    while (stack.items.len != 0) {
+        const frame = &stack.items[stack.items.len - 1];
+        if (frame.remaining == 0) {
+            // The subtree is complete, so the container can record how far the
+            // next sibling is.
+            const closed = frame.index;
+            _ = stack.pop();
+            nodes.items[closed].payload.offset = pool_mod.byteOffset(closed, @intCast(nodes.items.len));
+            continue;
+        }
+        const child = frame.source;
+        frame.source = source[child].next;
+        frame.remaining -= 1;
+
+        const index: u32 = @intCast(nodes.items.len);
+        try nodes.append(allocator, compactNode(source[child]));
+        if (childSlots(source[child])) |slots| {
+            try stack.append(allocator, .{
+                .source = head(source[child]),
+                .remaining = slots,
+                .index = index,
+            });
+        }
+    }
+
+    return .{
+        .pool = .{ .allocator = allocator, .buffer = nodes.allocatedSlice(), .len = nodes.items.len },
+        .input = input,
+        .root_index = root,
+    };
+}
+
+/// One open container while `toCompact` walks the tree.
+const CompactFrame = struct {
+    /// The next source child to copy.
+    source: u32,
+    /// The slots this container still has to copy.
+    remaining: usize,
+    /// The container's compact index, patched when it closes.
+    index: u32,
+};
+
+/// The number of slots a container's children occupy; null for a scalar.
+inline fn childSlots(node: NodeData) ?usize {
+    return switch (node.tag.type) {
+        .object => node.tag.len * 2,
+        .array => node.tag.len,
+        else => null,
+    };
+}
+
+/// Copies one node, dropping the mutable tag bits. A container starts with the
+/// skip distance of an empty one, which `toCompact` corrects when it closes.
+inline fn compactNode(node: NodeData) pool_mod.NodeData {
+    const tag = pool_mod.makeTag(node.tag.type, node.tag.subtype, node.tag.len);
+    return switch (node.tag.type) {
+        .array, .object => .{ .tag = tag, .payload = .{ .offset = pool_mod.node_size } },
+        else => .{ .tag = tag, .payload = node.payload },
+    };
+}
+
 /// Parses the JSON in `buffer[0..end]` into linked nodes in `storage` and
 /// returns the root index.
 ///

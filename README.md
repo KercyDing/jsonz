@@ -178,6 +178,17 @@ not reclaim its nodes, so a detached subtree stays valid, keeps accepting
 edits, and can be attached somewhere else. `deinit` releases everything the
 document allocated, so call it when the document's lifecycle ends.
 
+`toDocument` freezes an edited document into a compact, read-only one:
+
+```zig
+var frozen = try mutable.toDocument(allocator);
+defer frozen.deinit();
+```
+
+A `Node` borrows `*const Storage`, so a `*const Document` has no mutating API
+at all, while a `DocumentMut` cannot even be read through a constant pointer.
+Give the frozen form to whoever must not be able to change it.
+
 Editing never overflows the stack, however deep the document is.
 
 A document can also be parsed straight into a mutable one, without building a

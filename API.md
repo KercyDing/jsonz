@@ -318,8 +318,28 @@ not re-parse or re-serialize anything.
 | `deinit()` | Release the node and string storage. |
 | `root()` | The root `NodeMut`. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
+| `toDocument(allocator)` | Copy the document into a compact, read-only `Document`. |
 | `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer, with the same semantics as `Document`. |
 | `newNull()`, `newBool(value)`, `newNumber(value)`, `newString(value)`, `newArray()`, `newObject()` | Create a detached node to attach later. |
+
+`toDocument(allocator)` goes the other way: it freezes the edited document into
+a compact, read-only `Document`. The copy is deep, so the frozen document stays
+valid after this one is freed, and only the nodes the tree still holds are
+copied. Freezing is how a finished document is shared for reading: `Node`
+borrows `*const Storage`, so a `*const Document` has no mutating API at all,
+while a `DocumentMut` cannot even be *read* through a constant pointer.
+
+```zig
+var mutable = try jsonz.dom.parseMut(allocator, input, .{});
+defer mutable.deinit();
+
+try mutable.root().addString("state", "done");
+
+var frozen = try mutable.toDocument(allocator);
+defer frozen.deinit();
+
+// `frozen` is a plain `Document`: hand out `&frozen` and nothing can change it.
+```
 
 `newNumber` takes a Zig integer or float: a signed integer is stored as a
 negative-capable number, an unsigned integer as an unsigned one, and a float as

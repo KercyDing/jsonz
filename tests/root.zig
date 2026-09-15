@@ -4,5 +4,6 @@
 
 test {
     _ = @import("dom_tests.zig");
+    _ = @import("patch_tests.zig");
     _ = @import("typed_tests.zig");
 }

@@ -47,6 +47,9 @@ pub const parseInto = document.parseInto;
 /// Returns the required storage size for `parseInto`.
 pub const parseBufferSize = document.parseBufferSize;
 
+/// RFC 6902 JSON Patch.
+pub const patch = document_mut.patch;
+
 /// Serializes a DOM node to a newly allocated JSON byte slice owned by `allocator`.
 pub const toSlice = document.toSlice;
 /// Serializes a DOM node directly to an IO writer.

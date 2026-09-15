@@ -219,7 +219,7 @@ try mutable.applyPatch(patch, .{});
 
 All six operations are supported: `add`, `remove`, `replace`, `move`, `copy`
 and `test`. Applying is atomic: the operations run on a private copy, so a
-failed operation leaves the document untouched. `jsonz.dom.patch.applyOps`
+failed operation leaves the document untouched. `DocumentMut.patch.applyOps`
 applies an already parsed patch in place instead, which skips that copy but
 keeps the operations that ran before a failure.
 

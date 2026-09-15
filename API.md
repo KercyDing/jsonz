@@ -67,7 +67,7 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | Module | Purpose |
 | --- | --- |
 | `jsonz.typed` | Parse and serialize known Zig types. |
-| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy, and `jsonz.dom.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch to it. |
+| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy, with [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch as `DocumentMut.patch`. |
 | `jsonz.diagnostic` | Report the first JSON syntax error. |
 
 ## Public types
@@ -96,8 +96,8 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | `dom.ParseOptions` | struct | DOM parse options. |
 | `dom.ParseError` | error set | DOM parse errors. |
 | `dom.WriteOptions` | struct | DOM serialization options. |
-| `dom.patch.Error` | error set | Patch application errors. |
-| `dom.patch.Options` | struct | Patch parse options. |
+| `dom.DocumentMut.patch.Error` | error set | Patch application errors. |
+| `dom.DocumentMut.patch.Options` | struct | Patch parse options. |
 | `diagnostic.Diagnostic` | struct | One syntax error and where it is. |
 | `diagnostic.Span` | struct | A byte range of the input. |
 | `diagnostic.Note` | struct | Extra context for a report. |
@@ -450,8 +450,8 @@ document rather than in a module of its own.
 | API | Returns | Purpose |
 | --- | --- | --- |
 | `DocumentMut.applyPatch(text, options)` | `Error!void` | Parse and apply a patch, atomically. |
-| `dom.patch.apply(document, text, options)` | `Error!void` | The same, as a free function. |
-| `dom.patch.applyOps(document, ops)` | `Error!void` | Apply an already parsed patch in place. |
+| `DocumentMut.patch.apply(document, text, options)` | `Error!void` | The same, as a free function. |
+| `DocumentMut.patch.applyOps(document, ops)` | `Error!void` | Apply an already parsed patch in place. |
 
 A patch is a JSON array of operation objects. Each names its target with an
 RFC 6901 JSON Pointer and they are applied in order; the six operations are
@@ -486,7 +486,7 @@ in place and keeps the operations that ran before a failure.
 
 #### Patch options
 
-`dom.patch.Options`:
+`DocumentMut.patch.Options`:
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -598,7 +598,8 @@ so that stream decides; `toSlice` returns plain text.
 | `InvalidJson` | The input is not valid JSON. |
 | `OutOfMemory` | Allocation failed. |
 
-`dom.patch.Error` is `dom.ParseError`, `dom.PointerError` and `dom.MutateError`
+`DocumentMut.patch.Error` is `dom.ParseError`, `dom.PointerError` and
+`dom.MutateError`
 combined, plus:
 
 | Value | Cause |

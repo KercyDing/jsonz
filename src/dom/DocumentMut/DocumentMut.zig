@@ -10,6 +10,7 @@ const std = @import("std");
 const common = @import("../common.zig");
 const reader = @import("../reader.zig");
 const NodeMut = @import("NodeMut.zig");
+const patch = @import("patch.zig");
 
 /// Node and string storage owned by this document.
 storage: NodeMut.StorageMut,
@@ -71,6 +72,14 @@ pub fn deinit(self: *DocumentMut) void {
 /// Returns a handle to the document's root node.
 pub fn root(self: *DocumentMut) NodeMut {
     return .{ .storage = &self.storage, .index = self.storage.root };
+}
+
+/// Applies an RFC 6902 JSON Patch to this document, atomically.
+///
+/// It is `jsonz.dom.patch.apply` with this document as the target; a failed
+/// operation leaves the document unchanged.
+pub fn applyPatch(self: *DocumentMut, text: []const u8, options: patch.Options) patch.Error!void {
+    return patch.apply(self, text, options);
 }
 
 /// Serializes the document's root node to a newly allocated JSON byte slice.

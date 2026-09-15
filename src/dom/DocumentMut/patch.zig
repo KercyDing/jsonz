@@ -31,12 +31,8 @@ pub const Options = struct {
 ///
 /// The operations run on a private copy that is committed only on success, so a
 /// large document pays one extra deep copy. `applyOps` edits in place instead.
-pub fn apply(
-    allocator: std.mem.Allocator,
-    document: *DocumentMut,
-    patch: []const u8,
-    options: Options,
-) Error!void {
+pub fn apply(document: *DocumentMut, patch: []const u8, options: Options) Error!void {
+    const allocator = document.storage.allocator;
     var parsed = try Document.parse(allocator, patch, options.parse);
     defer parsed.deinit();
     var ops = try parsed.toMut(allocator);

@@ -2,7 +2,8 @@
 const std = @import("std");
 const jsonz = @import("jsonz");
 
-const patch = jsonz.patch;
+const dom = jsonz.dom;
+const patch = dom.patch;
 const testing = std.testing;
 
 test "patch: add" {
@@ -155,7 +156,7 @@ test "patch: test on deep values" {
 
     var mutable = try mutableFrom(nested);
     defer mutable.deinit();
-    try patch.apply(testing.allocator, &mutable, text, .{});
+    try mutable.applyPatch(text, .{});
 }
 
 test "patch: malformed patches" {
@@ -193,13 +194,23 @@ test "patch: operations apply in order and atomically" {
     );
 }
 
-test "patch: applyOps edits in place" {
-    var document = try jsonz.dom.parse(testing.allocator, "{\"a\":1}", .{});
+test "patch: the free function matches the method" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1}", .{});
     defer document.deinit();
     var mutable = try document.toMut(testing.allocator);
     defer mutable.deinit();
 
-    var ops = try jsonz.dom.parse(testing.allocator, "[{\"op\":\"add\",\"path\":\"/b\",\"value\":2}]", .{});
+    try patch.apply(&mutable, "[{\"op\":\"add\",\"path\":\"/b\",\"value\":2}]", .{});
+    try expectSerialized(&mutable, "{\"a\":1,\"b\":2}");
+}
+
+test "patch: applyOps edits in place" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+
+    var ops = try dom.parse(testing.allocator, "[{\"op\":\"add\",\"path\":\"/b\",\"value\":2}]", .{});
     defer ops.deinit();
     var ops_mut = try ops.toMut(testing.allocator);
     defer ops_mut.deinit();
@@ -208,13 +219,13 @@ test "patch: applyOps edits in place" {
     try expectSerialized(&mutable, "{\"a\":1,\"b\":2}");
 }
 
-fn mutableFrom(input: []const u8) !jsonz.dom.DocumentMut {
-    var document = try jsonz.dom.parse(testing.allocator, input, .{});
+fn mutableFrom(input: []const u8) !dom.DocumentMut {
+    var document = try dom.parse(testing.allocator, input, .{});
     defer document.deinit();
     return document.toMut(testing.allocator);
 }
 
-fn expectSerialized(document: *jsonz.dom.DocumentMut, expected: []const u8) !void {
+fn expectSerialized(document: *dom.DocumentMut, expected: []const u8) !void {
     const output = try document.toSlice(testing.allocator, .{});
     defer testing.allocator.free(output);
     try testing.expectEqualStrings(expected, output);
@@ -223,7 +234,7 @@ fn expectSerialized(document: *jsonz.dom.DocumentMut, expected: []const u8) !voi
 fn expectPatched(expected: []const u8, input: []const u8, text: []const u8) !void {
     var mutable = try mutableFrom(input);
     defer mutable.deinit();
-    try patch.apply(testing.allocator, &mutable, text, .{});
+    try mutable.applyPatch(text, .{});
     try expectSerialized(&mutable, expected);
 }
 
@@ -235,7 +246,7 @@ fn expectPatchFailure(expected: anyerror, input: []const u8, text: []const u8) !
     const before = try mutable.toSlice(testing.allocator, .{});
     defer testing.allocator.free(before);
 
-    try testing.expectError(expected, patch.apply(testing.allocator, &mutable, text, .{}));
+    try testing.expectError(expected, mutable.applyPatch(text, .{}));
 
     const after = try mutable.toSlice(testing.allocator, .{});
     defer testing.allocator.free(after);

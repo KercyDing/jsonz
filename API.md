@@ -306,9 +306,14 @@ Integer-to-floating-point conversion may lose precision.
 valid and unchanged, and the two share nothing. Editing is in place and does
 not re-parse or re-serialize anything.
 
+Build one from scratch with `init(allocator, .object)` or `.array`: a new
+document's root is a container, and `root()` is the node to fill. A root that
+holds something else is just a root that was replaced, e.g. with
+`root().replaceNumber(value)` or `replaceNull()`.
+
 | API | Purpose |
 | --- | --- |
-| `init(allocator)` | A document whose root is `null`, ready to be filled. |
+| `init(allocator, kind)` | An empty document whose root is `.object` or `.array`. |
 | `parse(allocator, input, options)` | Parse JSON straight into a mutable document. |
 | `applyPatch(text, options)` | Apply an RFC 6902 JSON Patch, atomically. |
 | `fromStorage(allocator, storage, root_index)` | Copy a compact document's storage. |

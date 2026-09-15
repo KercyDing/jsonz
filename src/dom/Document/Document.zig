@@ -9,6 +9,7 @@ const pool_mod = @import("../pool.zig");
 const reader = @import("../reader.zig");
 const common = @import("../common.zig");
 const Node = @import("Node.zig");
+const document_mut = @import("../DocumentMut/root.zig");
 
 const WriteOptions = common.WriteOptions;
 
@@ -34,6 +35,12 @@ pub fn deinit(self: *Document) void {
 /// Returns a view of the document's root node.
 pub fn root(self: *const Document) Node {
     return .{ .storage = &self.storage, .index = self.root_index };
+}
+
+/// Copies this document into a new mutable document. The original stays
+/// valid; the mutable tree owns its own nodes and strings.
+pub fn toMut(self: *const Document, allocator: std.mem.Allocator) std.mem.Allocator.Error!document_mut.DocumentMut {
+    return document_mut.DocumentMut.fromStorage(allocator, &self.storage, self.root_index);
 }
 
 /// Returns the kind of the root node.

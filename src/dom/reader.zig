@@ -70,14 +70,68 @@ pub const Error = error{ InvalidJson, OutOfMemory };
 /// offset into it. It must also have four readable zero bytes at
 /// `buffer[end..end + 4]`; the reader relies on them to skip bounds checks.
 pub fn read(pool: *Pool, buffer: []u8, end: usize, options: Options) Error!u32 {
-    var reader: Reader = .{
+    var reader: Reader(PoolSink) = .{
         .input = buffer[0 .. end + 4],
         .end = end,
-        .pool = pool,
         .options = options,
+        .sink = .{ .pool = pool },
     };
     return reader.run();
 }
+
+/// The compact builder: appends nodes to a `Pool` and records, in every
+/// container, the byte offset past its subtree.
+const PoolSink = struct {
+    pool: *Pool,
+
+    inline fn append(self: *PoolSink, parent: ?u32, tag: pool_mod.Tag, payload: pool_mod.Payload) Error!u32 {
+        _ = parent;
+        const pool = self.pool;
+        if (@as(usize, pool.len) == pool.buffer.len) {
+            return pool.append(.{ .tag = tag, .payload = payload }) catch return error.OutOfMemory;
+        }
+        const index: u32 = @intCast(pool.len);
+        const slot = &pool.buffer[pool.len];
+        slot.tag = tag;
+        slot.payload = payload;
+        pool.len += 1;
+        return index;
+    }
+
+    /// Counts `child` in `parent` and records the back-pointer that
+    /// `closeContainer` follows.
+    inline fn attach(self: *PoolSink, parent: u32, child: u32, count: usize) void {
+        const parent_node = self.pool.at(parent).*;
+        self.pool.atMut(parent).tag = pool_mod.makeTag(
+            pool_mod.nodeType(parent_node),
+            .none,
+            count + 1,
+        );
+        self.pool.atMut(child).payload.offset = pool_mod.byteOffset(parent, child);
+    }
+
+    /// The container's parent, or the container itself when it is the root.
+    inline fn parentOf(self: *PoolSink, container: u32) u32 {
+        const offset = self.pool.at(container).payload.offset;
+        return container - @as(u32, @intCast(offset / pool_mod.node_size));
+    }
+
+    inline fn nodeType(self: *PoolSink, node: u32) pool_mod.Type {
+        return pool_mod.nodeType(self.pool.at(node).*);
+    }
+
+    inline fn nodeLen(self: *PoolSink, node: u32) usize {
+        return pool_mod.nodeLen(self.pool.at(node).*);
+    }
+
+    /// Records a finished container's length and the offset past its subtree.
+    inline fn finish(self: *PoolSink, container: u32, len: usize) void {
+        self.pool.atMut(container).* = .{
+            .tag = pool_mod.makeTag(self.nodeType(container), .none, len),
+            .payload = .{ .offset = pool_mod.byteOffset(container, @intCast(self.pool.len)) },
+        };
+    }
+};
 
 const State = enum {
     root,
@@ -127,91 +181,125 @@ const Opened = struct {
 ///
 /// The cursor and container counters are locals in `run`, not fields: writing to
 /// the input and the pool would otherwise force a reload on every node.
-const Reader = struct {
-    /// The padded input; `self.end == end + 4`.
-    input: []u8,
-    /// The logical end of the JSON text.
-    end: usize,
-    pool: *Pool,
-    options: Options,
+pub fn Reader(comptime Sink: type) type {
+    return struct {
+        const Self = @This();
 
-    fn run(self: *Reader) Error!u32 {
-        const input = self.input;
-        var pos: usize = 0;
-        var current: u32 = 0;
-        var count: usize = 0;
-        var state: State = .root;
-        var root: ?u32 = null;
+        /// The padded input; `self.end == end + 4`.
+        input: []u8,
+        /// The logical end of the JSON text.
+        end: usize,
+        sink: Sink,
+        options: Options,
 
-        while (state != .done) {
-            // Each state skips trivia exactly once; `scanValue` and the
-            // separator checks below never scan it again.
-            pos = try self.skipTrivia(pos);
-            switch (state) {
-                .root => {
-                    if (pos == self.end) return error.InvalidJson;
-                    const scanned = try self.scanValue(null, count, pos);
-                    if (scanned.container) |container_state| {
-                        root = scanned.index;
-                        current = scanned.index;
-                        count = 0;
-                        state = container_state;
-                        pos = scanned.pos;
-                    } else {
-                        root = scanned.index;
-                        pos = try self.skipTrivia(scanned.pos);
-                        if (pos != self.end) return error.InvalidJson;
-                        state = .done;
-                    }
-                },
-                .array_value => {
-                    // Arrays of scalars are the densest shape in real
-                    // documents, so consume a whole run of them here instead of
-                    // bouncing through the state switch for every element.
-                    run: while (true) {
+        pub fn run(self: *Self) Error!u32 {
+            const input = self.input;
+            var pos: usize = 0;
+            var current: u32 = 0;
+            var count: usize = 0;
+            var state: State = .root;
+            var root: ?u32 = null;
+
+            while (state != .done) {
+                // Each state skips trivia exactly once; `scanValue` and the
+                // separator checks below never scan it again.
+                pos = try self.skipTrivia(pos);
+                switch (state) {
+                    .root => {
                         if (pos == self.end) return error.InvalidJson;
-                        const byte = input[pos];
-                        if (byte == ']') {
-                            pos += 1;
-                            const closed = try self.closeContainer(current, count, pos);
-                            state = closed.state;
-                            pos = closed.pos;
-                            current = closed.current;
-                            count = closed.count;
-                            break :run;
-                        }
-                        if (byte == '[' or byte == '{') {
-                            const opened = try self.openContainer(
-                                if (byte == '{') .object else .array,
-                                current,
-                                count,
-                                pos,
-                            );
-                            current = opened.index;
+                        const scanned = try self.scanValue(null, count, pos);
+                        if (scanned.container) |container_state| {
+                            root = scanned.index;
+                            current = scanned.index;
                             count = 0;
-                            pos = opened.pos;
-                            state = opened.state;
-                            break :run;
+                            state = container_state;
+                            pos = scanned.pos;
+                        } else {
+                            root = scanned.index;
+                            pos = try self.skipTrivia(scanned.pos);
+                            if (pos != self.end) return error.InvalidJson;
+                            state = .done;
                         }
-                        const scanned = try self.scanScalar(pos);
-                        pos = scanned.pos;
-                        count += 1;
-                        // A minified document puts the separator right after
-                        // the node, so try that before scanning for trivia.
-                        if (pos == self.end) return error.InvalidJson;
-                        var separator = input[pos];
-                        if (separator != ',' and separator != ']') {
-                            pos = try self.skipTrivia(pos);
+                    },
+                    .array_value => {
+                        // Arrays of scalars are the densest shape in real
+                        // documents, so consume a whole run of them here instead of
+                        // bouncing through the state switch for every element.
+                        run: while (true) {
                             if (pos == self.end) return error.InvalidJson;
-                            separator = input[pos];
+                            const byte = input[pos];
+                            if (byte == ']') {
+                                pos += 1;
+                                const closed = try self.closeContainer(current, count, pos);
+                                state = closed.state;
+                                pos = closed.pos;
+                                current = closed.current;
+                                count = closed.count;
+                                break :run;
+                            }
+                            if (byte == '[' or byte == '{') {
+                                const opened = try self.openContainer(
+                                    if (byte == '{') .object else .array,
+                                    current,
+                                    count,
+                                    pos,
+                                );
+                                current = opened.index;
+                                count = 0;
+                                pos = opened.pos;
+                                state = opened.state;
+                                break :run;
+                            }
+                            const scanned = try self.scanScalar(current, pos);
+                            pos = scanned.pos;
+                            count += 1;
+                            // A minified document puts the separator right after
+                            // the node, so try that before scanning for trivia.
+                            if (pos == self.end) return error.InvalidJson;
+                            var separator = input[pos];
+                            if (separator != ',' and separator != ']') {
+                                pos = try self.skipTrivia(pos);
+                                if (pos == self.end) return error.InvalidJson;
+                                separator = input[pos];
+                            }
+                            switch (separator) {
+                                ',' => {
+                                    pos += 1;
+                                    // Likewise, the next element usually starts
+                                    // right after the comma; a comment needs the
+                                    // slower trivia scan.
+                                    if (space_table[input[pos]] or (self.options.allow_comments and input[pos] == '/')) pos = try self.skipTrivia(pos);
+                                    if (pos < self.end and input[pos] == ']') {
+                                        if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                        pos += 1;
+                                        const closed = try self.closeContainer(current, count, pos);
+                                        state = closed.state;
+                                        pos = closed.pos;
+                                        current = closed.current;
+                                        count = closed.count;
+                                        break :run;
+                                    }
+                                },
+                                ']' => {
+                                    pos += 1;
+                                    const closed = try self.closeContainer(current, count, pos);
+                                    state = closed.state;
+                                    pos = closed.pos;
+                                    current = closed.current;
+                                    count = closed.count;
+                                    break :run;
+                                },
+                                else => return error.InvalidJson,
+                            }
                         }
-                        switch (separator) {
+                        continue;
+                    },
+                    .array_end => {
+                        if (pos == self.end) return error.InvalidJson;
+                        switch (input[pos]) {
                             ',' => {
                                 pos += 1;
-                                // Likewise, the next element usually starts
-                                // right after the comma; a comment needs the
-                                // slower trivia scan.
-                                if (space_table[input[pos]] or (self.options.allow_comments and input[pos] == '/')) pos = try self.skipTrivia(pos);
+                                pos = try self.skipTrivia(pos);
                                 if (pos < self.end and input[pos] == ']') {
                                     if (!self.options.allow_trailing_commas) return error.InvalidJson;
                                     pos += 1;
@@ -220,8 +308,7 @@ const Reader = struct {
                                     pos = closed.pos;
                                     current = closed.current;
                                     count = closed.count;
-                                    break :run;
-                                }
+                                } else state = .array_value;
                             },
                             ']' => {
                                 pos += 1;
@@ -230,82 +317,83 @@ const Reader = struct {
                                 pos = closed.pos;
                                 current = closed.current;
                                 count = closed.count;
-                                break :run;
                             },
                             else => return error.InvalidJson,
                         }
-                    }
-                    continue;
-                },
-                .array_end => {
-                    if (pos == self.end) return error.InvalidJson;
-                    switch (input[pos]) {
-                        ',' => {
-                            pos += 1;
-                            pos = try self.skipTrivia(pos);
-                            if (pos < self.end and input[pos] == ']') {
-                                if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                    },
+                    .object_key => {
+                        // As with arrays, run through scalar-valued pairs here so a
+                        // compact object does not re-dispatch per member.
+                        run: while (true) {
+                            if (pos == self.end) return error.InvalidJson;
+                            const byte = input[pos];
+                            if (byte == '}') {
                                 pos += 1;
                                 const closed = try self.closeContainer(current, count, pos);
                                 state = closed.state;
                                 pos = closed.pos;
                                 current = closed.current;
                                 count = closed.count;
-                            } else state = .array_value;
-                        },
-                        ']' => {
+                                break :run;
+                            }
+                            if (byte != '"') return error.InvalidJson;
+                            const key = try self.scanString(current, pos);
+                            pos = key.pos;
+                            count += 1;
+                            pos = try self.skipTrivia(pos);
+                            if (pos == self.end or input[pos] != ':') return error.InvalidJson;
                             pos += 1;
-                            const closed = try self.closeContainer(current, count, pos);
-                            state = closed.state;
-                            pos = closed.pos;
-                            current = closed.current;
-                            count = closed.count;
-                        },
-                        else => return error.InvalidJson,
-                    }
-                },
-                .object_key => {
-                    // As with arrays, run through scalar-valued pairs here so a
-                    // compact object does not re-dispatch per member.
-                    run: while (true) {
-                        if (pos == self.end) return error.InvalidJson;
-                        const byte = input[pos];
-                        if (byte == '}') {
-                            pos += 1;
-                            const closed = try self.closeContainer(current, count, pos);
-                            state = closed.state;
-                            pos = closed.pos;
-                            current = closed.current;
-                            count = closed.count;
-                            break :run;
+                            pos = try self.skipTrivia(pos);
+                            if (pos == self.end) return error.InvalidJson;
+                            const next_byte = input[pos];
+                            if (next_byte == '[' or next_byte == '{') {
+                                const opened = try self.openContainer(
+                                    if (next_byte == '{') .object else .array,
+                                    current,
+                                    count,
+                                    pos,
+                                );
+                                current = opened.index;
+                                count = 0;
+                                pos = opened.pos;
+                                state = opened.state;
+                                break :run;
+                            }
+                            const scanned = try self.scanScalar(current, pos);
+                            pos = scanned.pos;
+                            count += 1;
+                            pos = try self.skipTrivia(pos);
+                            if (pos == self.end) return error.InvalidJson;
+                            switch (input[pos]) {
+                                ',' => {
+                                    pos += 1;
+                                    pos = try self.skipTrivia(pos);
+                                    if (pos < self.end and input[pos] == '}') {
+                                        if (!self.options.allow_trailing_commas) return error.InvalidJson;
+                                        pos += 1;
+                                        const closed = try self.closeContainer(current, count, pos);
+                                        state = closed.state;
+                                        pos = closed.pos;
+                                        current = closed.current;
+                                        count = closed.count;
+                                        break :run;
+                                    }
+                                },
+                                '}' => {
+                                    pos += 1;
+                                    const closed = try self.closeContainer(current, count, pos);
+                                    state = closed.state;
+                                    pos = closed.pos;
+                                    current = closed.current;
+                                    count = closed.count;
+                                    break :run;
+                                },
+                                else => return error.InvalidJson,
+                            }
                         }
-                        if (byte != '"') return error.InvalidJson;
-                        const key = try self.scanString(pos);
-                        pos = key.pos;
-                        count += 1;
-                        pos = try self.skipTrivia(pos);
-                        if (pos == self.end or input[pos] != ':') return error.InvalidJson;
-                        pos += 1;
-                        pos = try self.skipTrivia(pos);
-                        if (pos == self.end) return error.InvalidJson;
-                        const next_byte = input[pos];
-                        if (next_byte == '[' or next_byte == '{') {
-                            const opened = try self.openContainer(
-                                if (next_byte == '{') .object else .array,
-                                current,
-                                count,
-                                pos,
-                            );
-                            current = opened.index;
-                            count = 0;
-                            pos = opened.pos;
-                            state = opened.state;
-                            break :run;
-                        }
-                        const scanned = try self.scanScalar(pos);
-                        pos = scanned.pos;
-                        count += 1;
-                        pos = try self.skipTrivia(pos);
+                        continue;
+                    },
+                    .object_end => {
                         if (pos == self.end) return error.InvalidJson;
                         switch (input[pos]) {
                             ',' => {
@@ -319,8 +407,7 @@ const Reader = struct {
                                     pos = closed.pos;
                                     current = closed.current;
                                     count = closed.count;
-                                    break :run;
-                                }
+                                } else state = .object_key;
                             },
                             '}' => {
                                 pos += 1;
@@ -329,525 +416,477 @@ const Reader = struct {
                                 pos = closed.pos;
                                 current = closed.current;
                                 count = closed.count;
-                                break :run;
                             },
                             else => return error.InvalidJson,
                         }
-                    }
-                    continue;
-                },
-                .object_end => {
-                    if (pos == self.end) return error.InvalidJson;
-                    switch (input[pos]) {
-                        ',' => {
-                            pos += 1;
-                            pos = try self.skipTrivia(pos);
-                            if (pos < self.end and input[pos] == '}') {
-                                if (!self.options.allow_trailing_commas) return error.InvalidJson;
-                                pos += 1;
-                                const closed = try self.closeContainer(current, count, pos);
-                                state = closed.state;
-                                pos = closed.pos;
-                                current = closed.current;
-                                count = closed.count;
-                            } else state = .object_key;
-                        },
-                        '}' => {
-                            pos += 1;
-                            const closed = try self.closeContainer(current, count, pos);
-                            state = closed.state;
-                            pos = closed.pos;
-                            current = closed.current;
-                            count = closed.count;
-                        },
-                        else => return error.InvalidJson,
-                    }
-                },
-                .done => unreachable,
+                    },
+                    .done => unreachable,
+                }
+            }
+            return root orelse unreachable;
+        }
+
+        /// Scans one node: a scalar, or a container header that the caller
+        /// must descend into.
+        /// Scans one scalar; containers are handled by the state machine.
+        inline fn scanScalar(self: *Self, parent: ?u32, pos: usize) Error!Scan {
+            switch (self.input[pos]) {
+                '"' => return self.scanString(parent, pos),
+                't' => return self.scanLiteral(parent, pos, "true", .bool, pool_mod.true_flag, 1),
+                'f' => return self.scanLiteral(parent, pos, "false", .bool, pool_mod.false_flag, 0),
+                'n' => return self.scanLiteral(parent, pos, "null", .null, .none, 0),
+                '-', '0'...'9' => return self.scanNumber(parent, pos),
+                else => return error.InvalidJson,
             }
         }
-        return root orelse unreachable;
-    }
 
-    /// Scans one node: a scalar, or a container header that the caller
-    /// must descend into.
-    /// Scans one scalar; containers are handled by the state machine.
-    inline fn scanScalar(self: *Reader, pos: usize) Error!Scan {
-        switch (self.input[pos]) {
-            '"' => return self.scanString(pos),
-            't' => return self.scanLiteral(pos, "true", .bool, pool_mod.true_flag, 1),
-            'f' => return self.scanLiteral(pos, "false", .bool, pool_mod.false_flag, 0),
-            'n' => return self.scanLiteral(pos, "null", .null, .none, 0),
-            '-', '0'...'9' => return self.scanNumber(pos),
-            else => return error.InvalidJson,
+        inline fn scanValue(self: *Self, parent: ?u32, count: usize, pos: usize) Error!Scanned {
+            if (pos == self.end) return error.InvalidJson;
+            const byte = self.input[pos];
+            switch (byte) {
+                '[' => {
+                    const opened = try self.openContainer(.array, parent, count, pos);
+                    return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
+                },
+                '{' => {
+                    const opened = try self.openContainer(.object, parent, count, pos);
+                    return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
+                },
+                '"' => {
+                    const scanned = try self.scanString(parent, pos);
+                    return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
+                },
+                't' => {
+                    const scanned = try self.scanLiteral(parent, pos, "true", .bool, pool_mod.true_flag, 1);
+                    return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
+                },
+                'f' => {
+                    const scanned = try self.scanLiteral(parent, pos, "false", .bool, pool_mod.false_flag, 0);
+                    return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
+                },
+                'n' => {
+                    const scanned = try self.scanLiteral(parent, pos, "null", .null, .none, 0);
+                    return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
+                },
+                '-', '0'...'9' => {
+                    const scanned = try self.scanNumber(parent, pos);
+                    return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
+                },
+                else => return error.InvalidJson,
+            }
         }
-    }
 
-    inline fn scanValue(self: *Reader, parent: ?u32, count: usize, pos: usize) Error!Scanned {
-        if (pos == self.end) return error.InvalidJson;
-        const byte = self.input[pos];
-        switch (byte) {
-            '[' => {
-                const opened = try self.openContainer(.array, parent, count, pos);
-                return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
-            },
-            '{' => {
-                const opened = try self.openContainer(.object, parent, count, pos);
-                return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
-            },
-            '"' => {
-                const scanned = try self.scanString(pos);
-                return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
-            },
-            't' => {
-                const scanned = try self.scanLiteral(pos, "true", .bool, pool_mod.true_flag, 1);
-                return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
-            },
-            'f' => {
-                const scanned = try self.scanLiteral(pos, "false", .bool, pool_mod.false_flag, 0);
-                return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
-            },
-            'n' => {
-                const scanned = try self.scanLiteral(pos, "null", .null, .none, 0);
-                return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
-            },
-            '-', '0'...'9' => {
-                const scanned = try self.scanNumber(pos);
-                return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
-            },
-            else => return error.InvalidJson,
-        }
-    }
-
-    inline fn openContainer(
-        self: *Reader,
-        node_type: Type,
-        parent: ?u32,
-        count: usize,
-        pos: usize,
-    ) Error!Opened {
-        const index = try self.append(pool_mod.makeTag(node_type, .none, 0), .{ .uint = 0 });
-        if (parent) |parent_index| {
+        inline fn openContainer(
+            self: *Self,
+            node_type: Type,
+            parent: ?u32,
+            count: usize,
+            pos: usize,
+        ) Error!Opened {
+            const index = try self.append(parent, pool_mod.makeTag(node_type, .none, 0), .{ .uint = 0 });
             // Count the new child in the parent. For an array this is its final
-            // length; for an object it is the number of finished key/value
-            // slots, converted to a pair count when the object closes.
-            const parent_node = self.pool.at(parent_index).*;
-            self.pool.atMut(parent_index).tag = pool_mod.makeTag(
-                pool_mod.nodeType(parent_node),
-                .none,
-                count + 1,
-            );
-            self.pool.atMut(index).payload.offset = pool_mod.byteOffset(parent_index, index);
-        }
-        return .{
-            .index = index,
-            .pos = pos + 1,
-            .state = if (node_type == .object) .object_key else .array_value,
-        };
-    }
-
-    inline fn closeContainer(self: *Reader, container: u32, count: usize, pos: usize) Error!Closed {
-        const node = self.pool.at(container).*;
-        const node_type = pool_mod.nodeType(node);
-        const parent = container - @as(u32, @intCast(node.payload.offset / pool_mod.node_size));
-        const len = if (node_type == .object) count / 2 else count;
-        // The offset points one node past the last child, so that walking
-        // siblings can skip this whole subtree.
-        self.pool.atMut(container).* = .{
-            .tag = pool_mod.makeTag(node_type, .none, len),
-            .payload = .{ .offset = pool_mod.byteOffset(container, @intCast(self.pool.len)) },
-        };
-        if (parent == container) {
-            const end = try self.skipTrivia(pos);
-            if (end != self.end) return error.InvalidJson;
-            return .{ .state = .done, .pos = end, .current = container, .count = count };
+            // length; for an object it is the number of finished key/value slots,
+            // converted to a pair count when the object closes.
+            if (parent) |parent_index| self.sink.attach(parent_index, index, count);
+            return .{
+                .index = index,
+                .pos = pos + 1,
+                .state = if (node_type == .object) .object_key else .array_value,
+            };
         }
 
-        const parent_node = self.pool.at(parent).*;
-        return .{
-            .state = if (pool_mod.nodeType(parent_node) == .object) .object_end else .array_end,
-            .pos = pos,
-            .current = parent,
-            .count = pool_mod.nodeLen(parent_node),
-        };
-    }
-
-    inline fn scanLiteral(
-        self: *Reader,
-        pos: usize,
-        comptime text: []const u8,
-        node_type: Type,
-        subtype: Subtype,
-        payload: u64,
-    ) Error!Scan {
-        // The zero padding keeps this read in bounds.
-        if (!std.mem.eql(u8, self.input[pos..][0..text.len], text)) {
-            return error.InvalidJson;
-        }
-        return .{
-            .index = try self.append(pool_mod.makeTag(node_type, subtype, 0), .{ .uint = payload }),
-            .pos = pos + text.len,
-        };
-    }
-
-    /// Reads a number with a single scan.
-    ///
-    /// `float.scanNumber` reports the exact integer value when the token is a
-    /// plain integer, and the significant digits a double conversion needs
-    /// otherwise, so no digits are scanned twice.
-    inline fn scanNumber(self: *Reader, start: usize) Error!Scan {
-        const scanned = float.scanNumber(self.input[0..self.end], start) catch
-            return error.InvalidJson;
-
-        if (scanned.integer) |magnitude| {
-            if (scanned.negative) {
-                if (magnitude < (@as(u64, 1) << 63)) {
-                    return .{
-                        .index = try self.append(
-                            pool_mod.makeTag(.number, pool_mod.sint, 0),
-                            .{ .int = -@as(i64, @intCast(magnitude)) },
-                        ),
-                        .pos = scanned.end,
-                    };
-                } else if (magnitude == (@as(u64, 1) << 63)) {
-                    return .{
-                        .index = try self.append(
-                            pool_mod.makeTag(.number, pool_mod.sint, 0),
-                            .{ .int = std.math.minInt(i64) },
-                        ),
-                        .pos = scanned.end,
-                    };
-                }
-            } else {
-                return .{
-                    .index = try self.append(
-                        pool_mod.makeTag(.number, pool_mod.uint, 0),
-                        .{ .uint = magnitude },
-                    ),
-                    .pos = scanned.end,
-                };
+        inline fn closeContainer(self: *Self, container: u32, count: usize, pos: usize) Error!Closed {
+            const node_type = self.sink.nodeType(container);
+            const parent = self.sink.parentOf(container);
+            self.sink.finish(container, if (node_type == .object) count / 2 else count);
+            if (parent == container) {
+                const end = try self.skipTrivia(pos);
+                if (end != self.end) return error.InvalidJson;
+                return .{ .state = .done, .pos = end, .current = container, .count = count };
             }
+            return .{
+                .state = if (self.sink.nodeType(parent) == .object) .object_end else .array_end,
+                .pos = pos,
+                .current = parent,
+                .count = self.sink.nodeLen(parent),
+            };
         }
 
-        const value = float.convertScanned(f64, scanned) orelse
-            (std.fmt.parseFloat(f64, self.input[start..scanned.end]) catch
-                return error.InvalidJson);
-        if (!std.math.isFinite(value)) return error.InvalidJson;
-        return .{
-            .index = try self.append(
-                pool_mod.makeTag(.number, .real, 0),
-                .{ .float = value },
-            ),
-            .pos = scanned.end,
-        };
-    }
-
-    /// Reads a string, decoding escapes in place.
-    ///
-    /// Strings without escapes take a scan-only path. Plain 32-byte chunks are
-    /// skipped with SIMD; a chunk holding a quote, escape, control byte, or
-    /// non-ASCII byte is walked byte by byte before the vector scan resumes.
-    inline fn scanString(self: *Reader, start: usize) Error!Scan {
-        const input = self.input;
-        const text_start = start + 1;
-        var scan = text_start;
-
-        scan_loop: while (true) {
-            while (scan + scan_chunk <= self.end) {
-                const bytes: ScanVector = input[scan..][0..scan_chunk].*;
-                const special = specialMask(bytes);
-                if (special != 0) {
-                    scan += @ctz(special);
-                    break;
-                }
-                scan += scan_chunk;
-            }
-            const window_end = @min(scan + scan_chunk, self.end);
-            while (scan < window_end) {
-                const byte = input[scan];
-                if (byte == '"') {
-                    return .{
-                        .index = try self.append(pool_mod.makeTag(.string, pool_mod.no_escape, scan - text_start), .{ .offset = text_start }),
-                        .pos = scan + 1,
-                    };
-                }
-                if (byte == '\\') break :scan_loop;
-                if (byte < 0x20) return error.InvalidJson;
-                if (byte >= 0x80) {
-                    scan = try self.skipUtf8(scan);
-                } else {
-                    scan += 1;
-                }
-            }
-            if (scan >= self.end) return error.InvalidJson;
-        }
-
-        // At least one escape: decode the rest in place. `write` trails `scan`
-        // because escape sequences shrink.
-        var pos = scan;
-        var write = scan;
-        while (true) {
-            while (pos + scan_chunk <= self.end) {
-                const bytes: ScanVector = input[pos..][0..scan_chunk].*;
-                const special = specialMask(bytes);
-                if (special != 0) {
-                    const plain = @ctz(special);
-                    if (plain != 0) {
-                        std.mem.copyForwards(
-                            u8,
-                            input[write..][0..plain],
-                            input[pos..][0..plain],
-                        );
-                        write += plain;
-                        pos += plain;
-                    }
-                    break;
-                }
-                std.mem.copyForwards(
-                    u8,
-                    input[write..][0..scan_chunk],
-                    input[pos..][0..scan_chunk],
-                );
-                write += scan_chunk;
-                pos += scan_chunk;
-            }
-            const window_end = @min(pos + scan_chunk, self.end);
-            while (pos < window_end) {
-                const byte = input[pos];
-                if (byte >= 0x20 and byte != '"' and byte != '\\' and byte < 0x80) {
-                    input[write] = byte;
-                    write += 1;
-                    pos += 1;
-                    continue;
-                }
-                switch (byte) {
-                    '"' => {
-                        return .{
-                            .index = try self.append(pool_mod.makeTag(.string, .none, write - text_start), .{ .offset = text_start }),
-                            .pos = pos + 1,
-                        };
-                    },
-                    '\\' => {
-                        pos += 1;
-                        if (pos == self.end) return error.InvalidJson;
-                        const escape = input[pos];
-                        pos += 1;
-                        if (escape == 'u') {
-                            const decoded_escape = try self.readUnicodeEscape(pos, write);
-                            pos = decoded_escape.pos;
-                            write = decoded_escape.write;
-                            continue;
-                        }
-                        const decoded: u8 = switch (escape) {
-                            '"', '\\', '/' => escape,
-                            'b' => 0x08,
-                            'f' => 0x0c,
-                            'n' => '\n',
-                            'r' => '\r',
-                            't' => '\t',
-                            else => return error.InvalidJson,
-                        };
-                        input[write] = decoded;
-                        write += 1;
-                    },
-                    0x00...0x1f => return error.InvalidJson,
-                    else => {
-                        // Validate the whole multi-byte run, then move it as one
-                        // span; `write` never passes `pos`, so copy forwards.
-                        const next = try self.skipUtf8(pos);
-                        const len = next - pos;
-                        std.mem.copyForwards(
-                            u8,
-                            input[write..][0..len],
-                            input[pos..][0..len],
-                        );
-                        write += len;
-                        pos = next;
-                    },
-                }
-            }
-            if (pos >= self.end) return error.InvalidJson;
-        }
-    }
-
-    /// Advances over a run of UTF-8 sequences, returning the offset of the first
-    /// ASCII byte or the end of the run.
-    ///
-    /// One little-endian 32-bit load validates a whole sequence, so runs of
-    /// same-length sequences move several bytes per iteration.
-    fn skipUtf8(self: *Reader, start: usize) Error!usize {
-        const input = self.input;
-        var pos = start;
-        while (pos + 4 <= self.end) {
-            const u = std.mem.readInt(u32, input[pos..][0..4], .little);
-            // 3-byte sequence [1110xxxx 10xxxxxx 10xxxxxx], rejecting overlong
-            // and surrogate halves.
-            if (u & 0x00C0C0F0 == 0x008080E0) {
-                const required = u & 0x0000200F;
-                if (required == 0 or required == 0x0000200D) return error.InvalidJson;
-                pos += 3;
-                continue;
-            }
-            // 2-byte sequence [110xxxxx 10xxxxxx], rejecting overlong C0/C1.
-            if (u & 0x0000C0E0 == 0x000080C0) {
-                if (u & 0x0000001E == 0) return error.InvalidJson;
-                pos += 2;
-                continue;
-            }
-            // 4-byte sequence [11110xxx 10xxxxxx 10xxxxxx 10xxxxxx], restricted
-            // to U+10000..U+10FFFF. It is valid when either requirement clears.
-            if (u & 0xC0C0C0F8 == 0x808080F0) {
-                const required = u & 0x00003007;
-                if (required == 0 or (required & 0x04 != 0 and required & 0x00003003 != 0)) {
-                    return error.InvalidJson;
-                }
-                pos += 4;
-                continue;
-            }
-            if (u & 0x80 == 0) return pos;
-            return error.InvalidJson;
-        }
-        // Fewer than four bytes remain: validate one sequence at a time.
-        while (pos < self.end) {
-            if (input[pos] < 0x80) return pos;
-            pos += try self.utf8SequenceLen(pos);
-        }
-        return pos;
-    }
-
-    /// Validates one UTF-8 sequence at `pos` and returns its byte length.
-    ///
-    /// Rejects lone continuation bytes, overlong forms, surrogates, and code
-    /// points beyond U+10FFFF.
-    inline fn utf8SequenceLen(self: *Reader, pos: usize) Error!usize {
-        const input = self.input;
-        const b0 = input[pos];
-        const extra = utf8_continuations[b0];
-        if (extra == 0xFF or pos + extra >= self.end) return error.InvalidJson;
-        if (input[pos + 1] & 0xC0 != 0x80) return error.InvalidJson;
-        if (extra == 1) return 2;
-        if (input[pos + 2] & 0xC0 != 0x80) return error.InvalidJson;
-        if (extra == 2) {
-            const b1 = input[pos + 1];
-            if (b0 == 0xE0 and b1 < 0xA0) return error.InvalidJson;
-            if (b0 == 0xED and b1 >= 0xA0) return error.InvalidJson;
-            return 3;
-        }
-        if (input[pos + 3] & 0xC0 != 0x80) return error.InvalidJson;
-        const b1 = input[pos + 1];
-        if (b0 == 0xF0 and b1 < 0x90) return error.InvalidJson;
-        if (b0 == 0xF4 and b1 >= 0x90) return error.InvalidJson;
-        return 4;
-    }
-
-    /// Decodes `\uXXXX`, including surrogate pairs, into UTF-8 at `write`.
-    fn readUnicodeEscape(self: *Reader, start: usize, write: usize) Error!Escape {
-        var pos = start;
-        var codepoint = try self.readHex4(pos);
-        pos += 4;
-        if (codepoint >= 0xd800 and codepoint <= 0xdbff) {
-            if (pos + 2 > self.end or
-                self.input[pos] != '\\' or self.input[pos + 1] != 'u')
-            {
+        inline fn scanLiteral(
+            self: *Self,
+            parent: ?u32,
+            pos: usize,
+            comptime text: []const u8,
+            node_type: Type,
+            subtype: Subtype,
+            payload: u64,
+        ) Error!Scan {
+            // The zero padding keeps this read in bounds.
+            if (!std.mem.eql(u8, self.input[pos..][0..text.len], text)) {
                 return error.InvalidJson;
             }
-            pos += 2;
-            const low = try self.readHex4(pos);
-            pos += 4;
-            if (low < 0xdc00 or low > 0xdfff) return error.InvalidJson;
-            codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00);
-        } else if (codepoint >= 0xdc00 and codepoint <= 0xdfff) {
-            return error.InvalidJson;
+            return .{
+                .index = try self.append(parent, pool_mod.makeTag(node_type, subtype, 0), .{ .uint = payload }),
+                .pos = pos + text.len,
+            };
         }
 
-        // Encode the code point directly; it is already known to be a scalar
-        // node, so no validation is needed.
-        const input = self.input;
-        if (codepoint < 0x80) {
-            input[write] = @intCast(codepoint);
-            return .{ .pos = pos, .write = write + 1 };
-        }
-        if (codepoint < 0x800) {
-            input[write] = @intCast(0xC0 | (codepoint >> 6));
-            input[write + 1] = @intCast(0x80 | (codepoint & 0x3F));
-            return .{ .pos = pos, .write = write + 2 };
-        }
-        if (codepoint < 0x10000) {
-            input[write] = @intCast(0xE0 | (codepoint >> 12));
-            input[write + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
-            input[write + 2] = @intCast(0x80 | (codepoint & 0x3F));
-            return .{ .pos = pos, .write = write + 3 };
-        }
-        input[write] = @intCast(0xF0 | (codepoint >> 18));
-        input[write + 1] = @intCast(0x80 | ((codepoint >> 12) & 0x3F));
-        input[write + 2] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
-        input[write + 3] = @intCast(0x80 | (codepoint & 0x3F));
-        return .{ .pos = pos, .write = write + 4 };
-    }
+        /// Reads a number with a single scan.
+        ///
+        /// `float.scanNumber` reports the exact integer value when the token is a
+        /// plain integer, and the significant digits a double conversion needs
+        /// otherwise, so no digits are scanned twice.
+        inline fn scanNumber(self: *Self, parent: ?u32, start: usize) Error!Scan {
+            const scanned = float.scanNumber(self.input[0..self.end], start) catch
+                return error.InvalidJson;
 
-    /// Reads exactly four hex digits at `pos`.
-    inline fn readHex4(self: *Reader, pos: usize) Error!u21 {
-        if (pos + 4 > self.end) return error.InvalidJson;
-        const input = self.input;
-        const a = hex_digits[input[pos]];
-        const b = hex_digits[input[pos + 1]];
-        const c = hex_digits[input[pos + 2]];
-        const d = hex_digits[input[pos + 3]];
-        // Valid digits are 0..15, so any invalid byte shows up in the high bits.
-        if ((a | b | c | d) > 0x0F) return error.InvalidJson;
-        return (@as(u21, a) << 12) | (@as(u21, b) << 8) | (@as(u21, c) << 4) | d;
-    }
+            if (scanned.integer) |magnitude| {
+                if (scanned.negative) {
+                    if (magnitude < (@as(u64, 1) << 63)) {
+                        return .{
+                            .index = try self.append(
+                                parent,
+                                pool_mod.makeTag(.number, pool_mod.sint, 0),
+                                .{ .int = -@as(i64, @intCast(magnitude)) },
+                            ),
+                            .pos = scanned.end,
+                        };
+                    } else if (magnitude == (@as(u64, 1) << 63)) {
+                        return .{
+                            .index = try self.append(
+                                parent,
+                                pool_mod.makeTag(.number, pool_mod.sint, 0),
+                                .{ .int = std.math.minInt(i64) },
+                            ),
+                            .pos = scanned.end,
+                        };
+                    }
+                } else {
+                    return .{
+                        .index = try self.append(
+                            parent,
+                            pool_mod.makeTag(.number, pool_mod.uint, 0),
+                            .{ .uint = magnitude },
+                        ),
+                        .pos = scanned.end,
+                    };
+                }
+            }
 
-    /// Appends a node given as its two words; only growth is a call.
-    ///
-    /// Passing them separately keeps the 16-byte `Node` out of the caller's
-    /// stack frame.
-    inline fn append(self: *Reader, tag: pool_mod.Tag, payload: pool_mod.Payload) Error!u32 {
-        const pool = self.pool;
-        if (@as(usize, pool.len) == pool.buffer.len) {
-            return pool.append(.{ .tag = tag, .payload = payload }) catch return error.OutOfMemory;
+            const value = float.convertScanned(f64, scanned) orelse
+                (std.fmt.parseFloat(f64, self.input[start..scanned.end]) catch
+                    return error.InvalidJson);
+            if (!std.math.isFinite(value)) return error.InvalidJson;
+            return .{
+                .index = try self.append(
+                    parent,
+                    pool_mod.makeTag(.number, .real, 0),
+                    .{ .float = value },
+                ),
+                .pos = scanned.end,
+            };
         }
-        const index: u32 = @intCast(pool.len);
-        const slot = &pool.buffer[pool.len];
-        slot.tag = tag;
-        slot.payload = payload;
-        pool.len += 1;
-        return index;
-    }
 
-    fn skipTrivia(self: *Reader, start: usize) Error!usize {
-        const input = self.input;
-        var pos = start;
-        if (!self.options.allow_comments) {
-            while (space_table[input[pos]]) pos += 1;
-            return pos;
-        }
-        // A zero padding byte is not whitespace, so this always terminates.
-        while (true) {
-            switch (input[pos]) {
-                ' ', '\t', '\n', '\r' => pos += 1,
-                '/' => pos = try self.skipComment(pos),
-                else => return pos,
+        /// Reads a string, decoding escapes in place.
+        ///
+        /// Strings without escapes take a scan-only path. Plain 32-byte chunks are
+        /// skipped with SIMD; a chunk holding a quote, escape, control byte, or
+        /// non-ASCII byte is walked byte by byte before the vector scan resumes.
+        inline fn scanString(self: *Self, parent: ?u32, start: usize) Error!Scan {
+            const input = self.input;
+            const text_start = start + 1;
+            var scan = text_start;
+
+            scan_loop: while (true) {
+                while (scan + scan_chunk <= self.end) {
+                    const bytes: ScanVector = input[scan..][0..scan_chunk].*;
+                    const special = specialMask(bytes);
+                    if (special != 0) {
+                        scan += @ctz(special);
+                        break;
+                    }
+                    scan += scan_chunk;
+                }
+                const window_end = @min(scan + scan_chunk, self.end);
+                while (scan < window_end) {
+                    const byte = input[scan];
+                    if (byte == '"') {
+                        return .{
+                            .index = try self.append(parent, pool_mod.makeTag(.string, pool_mod.no_escape, scan - text_start), .{ .offset = text_start }),
+                            .pos = scan + 1,
+                        };
+                    }
+                    if (byte == '\\') break :scan_loop;
+                    if (byte < 0x20) return error.InvalidJson;
+                    if (byte >= 0x80) {
+                        scan = try self.skipUtf8(scan);
+                    } else {
+                        scan += 1;
+                    }
+                }
+                if (scan >= self.end) return error.InvalidJson;
+            }
+
+            // At least one escape: decode the rest in place. `write` trails `scan`
+            // because escape sequences shrink.
+            var pos = scan;
+            var write = scan;
+            while (true) {
+                while (pos + scan_chunk <= self.end) {
+                    const bytes: ScanVector = input[pos..][0..scan_chunk].*;
+                    const special = specialMask(bytes);
+                    if (special != 0) {
+                        const plain = @ctz(special);
+                        if (plain != 0) {
+                            std.mem.copyForwards(
+                                u8,
+                                input[write..][0..plain],
+                                input[pos..][0..plain],
+                            );
+                            write += plain;
+                            pos += plain;
+                        }
+                        break;
+                    }
+                    std.mem.copyForwards(
+                        u8,
+                        input[write..][0..scan_chunk],
+                        input[pos..][0..scan_chunk],
+                    );
+                    write += scan_chunk;
+                    pos += scan_chunk;
+                }
+                const window_end = @min(pos + scan_chunk, self.end);
+                while (pos < window_end) {
+                    const byte = input[pos];
+                    if (byte >= 0x20 and byte != '"' and byte != '\\' and byte < 0x80) {
+                        input[write] = byte;
+                        write += 1;
+                        pos += 1;
+                        continue;
+                    }
+                    switch (byte) {
+                        '"' => {
+                            return .{
+                                .index = try self.append(parent, pool_mod.makeTag(.string, .none, write - text_start), .{ .offset = text_start }),
+                                .pos = pos + 1,
+                            };
+                        },
+                        '\\' => {
+                            pos += 1;
+                            if (pos == self.end) return error.InvalidJson;
+                            const escape = input[pos];
+                            pos += 1;
+                            if (escape == 'u') {
+                                const decoded_escape = try self.readUnicodeEscape(pos, write);
+                                pos = decoded_escape.pos;
+                                write = decoded_escape.write;
+                                continue;
+                            }
+                            const decoded: u8 = switch (escape) {
+                                '"', '\\', '/' => escape,
+                                'b' => 0x08,
+                                'f' => 0x0c,
+                                'n' => '\n',
+                                'r' => '\r',
+                                't' => '\t',
+                                else => return error.InvalidJson,
+                            };
+                            input[write] = decoded;
+                            write += 1;
+                        },
+                        0x00...0x1f => return error.InvalidJson,
+                        else => {
+                            // Validate the whole multi-byte run, then move it as one
+                            // span; `write` never passes `pos`, so copy forwards.
+                            const next = try self.skipUtf8(pos);
+                            const len = next - pos;
+                            std.mem.copyForwards(
+                                u8,
+                                input[write..][0..len],
+                                input[pos..][0..len],
+                            );
+                            write += len;
+                            pos = next;
+                        },
+                    }
+                }
+                if (pos >= self.end) return error.InvalidJson;
             }
         }
-    }
 
-    fn skipComment(self: *Reader, start: usize) Error!usize {
-        const input = self.input;
-        if (start + 1 >= self.end) return error.InvalidJson;
-        const kind = input[start + 1];
-        var pos = start + 2;
-        if (kind == '/') {
-            while (pos < self.end and input[pos] != '\n' and input[pos] != '\r') pos += 1;
+        /// Advances over a run of UTF-8 sequences, returning the offset of the first
+        /// ASCII byte or the end of the run.
+        ///
+        /// One little-endian 32-bit load validates a whole sequence, so runs of
+        /// same-length sequences move several bytes per iteration.
+        fn skipUtf8(self: *Self, start: usize) Error!usize {
+            const input = self.input;
+            var pos = start;
+            while (pos + 4 <= self.end) {
+                const u = std.mem.readInt(u32, input[pos..][0..4], .little);
+                // 3-byte sequence [1110xxxx 10xxxxxx 10xxxxxx], rejecting overlong
+                // and surrogate halves.
+                if (u & 0x00C0C0F0 == 0x008080E0) {
+                    const required = u & 0x0000200F;
+                    if (required == 0 or required == 0x0000200D) return error.InvalidJson;
+                    pos += 3;
+                    continue;
+                }
+                // 2-byte sequence [110xxxxx 10xxxxxx], rejecting overlong C0/C1.
+                if (u & 0x0000C0E0 == 0x000080C0) {
+                    if (u & 0x0000001E == 0) return error.InvalidJson;
+                    pos += 2;
+                    continue;
+                }
+                // 4-byte sequence [11110xxx 10xxxxxx 10xxxxxx 10xxxxxx], restricted
+                // to U+10000..U+10FFFF. It is valid when either requirement clears.
+                if (u & 0xC0C0C0F8 == 0x808080F0) {
+                    const required = u & 0x00003007;
+                    if (required == 0 or (required & 0x04 != 0 and required & 0x00003003 != 0)) {
+                        return error.InvalidJson;
+                    }
+                    pos += 4;
+                    continue;
+                }
+                if (u & 0x80 == 0) return pos;
+                return error.InvalidJson;
+            }
+            // Fewer than four bytes remain: validate one sequence at a time.
+            while (pos < self.end) {
+                if (input[pos] < 0x80) return pos;
+                pos += try self.utf8SequenceLen(pos);
+            }
             return pos;
         }
-        if (kind != '*') return error.InvalidJson;
-        while (pos + 1 < self.end) : (pos += 1) {
-            if (input[pos] == '*' and input[pos + 1] == '/') return pos + 2;
+
+        /// Validates one UTF-8 sequence at `pos` and returns its byte length.
+        ///
+        /// Rejects lone continuation bytes, overlong forms, surrogates, and code
+        /// points beyond U+10FFFF.
+        inline fn utf8SequenceLen(self: *Self, pos: usize) Error!usize {
+            const input = self.input;
+            const b0 = input[pos];
+            const extra = utf8_continuations[b0];
+            if (extra == 0xFF or pos + extra >= self.end) return error.InvalidJson;
+            if (input[pos + 1] & 0xC0 != 0x80) return error.InvalidJson;
+            if (extra == 1) return 2;
+            if (input[pos + 2] & 0xC0 != 0x80) return error.InvalidJson;
+            if (extra == 2) {
+                const b1 = input[pos + 1];
+                if (b0 == 0xE0 and b1 < 0xA0) return error.InvalidJson;
+                if (b0 == 0xED and b1 >= 0xA0) return error.InvalidJson;
+                return 3;
+            }
+            if (input[pos + 3] & 0xC0 != 0x80) return error.InvalidJson;
+            const b1 = input[pos + 1];
+            if (b0 == 0xF0 and b1 < 0x90) return error.InvalidJson;
+            if (b0 == 0xF4 and b1 >= 0x90) return error.InvalidJson;
+            return 4;
         }
-        return error.InvalidJson;
-    }
-};
+
+        /// Decodes `\uXXXX`, including surrogate pairs, into UTF-8 at `write`.
+        fn readUnicodeEscape(self: *Self, start: usize, write: usize) Error!Escape {
+            var pos = start;
+            var codepoint = try self.readHex4(pos);
+            pos += 4;
+            if (codepoint >= 0xd800 and codepoint <= 0xdbff) {
+                if (pos + 2 > self.end or
+                    self.input[pos] != '\\' or self.input[pos + 1] != 'u')
+                {
+                    return error.InvalidJson;
+                }
+                pos += 2;
+                const low = try self.readHex4(pos);
+                pos += 4;
+                if (low < 0xdc00 or low > 0xdfff) return error.InvalidJson;
+                codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00);
+            } else if (codepoint >= 0xdc00 and codepoint <= 0xdfff) {
+                return error.InvalidJson;
+            }
+
+            // Encode the code point directly; it is already known to be a scalar
+            // node, so no validation is needed.
+            const input = self.input;
+            if (codepoint < 0x80) {
+                input[write] = @intCast(codepoint);
+                return .{ .pos = pos, .write = write + 1 };
+            }
+            if (codepoint < 0x800) {
+                input[write] = @intCast(0xC0 | (codepoint >> 6));
+                input[write + 1] = @intCast(0x80 | (codepoint & 0x3F));
+                return .{ .pos = pos, .write = write + 2 };
+            }
+            if (codepoint < 0x10000) {
+                input[write] = @intCast(0xE0 | (codepoint >> 12));
+                input[write + 1] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+                input[write + 2] = @intCast(0x80 | (codepoint & 0x3F));
+                return .{ .pos = pos, .write = write + 3 };
+            }
+            input[write] = @intCast(0xF0 | (codepoint >> 18));
+            input[write + 1] = @intCast(0x80 | ((codepoint >> 12) & 0x3F));
+            input[write + 2] = @intCast(0x80 | ((codepoint >> 6) & 0x3F));
+            input[write + 3] = @intCast(0x80 | (codepoint & 0x3F));
+            return .{ .pos = pos, .write = write + 4 };
+        }
+
+        /// Reads exactly four hex digits at `pos`.
+        inline fn readHex4(self: *Self, pos: usize) Error!u21 {
+            if (pos + 4 > self.end) return error.InvalidJson;
+            const input = self.input;
+            const a = hex_digits[input[pos]];
+            const b = hex_digits[input[pos + 1]];
+            const c = hex_digits[input[pos + 2]];
+            const d = hex_digits[input[pos + 3]];
+            // Valid digits are 0..15, so any invalid byte shows up in the high bits.
+            if ((a | b | c | d) > 0x0F) return error.InvalidJson;
+            return (@as(u21, a) << 12) | (@as(u21, b) << 8) | (@as(u21, c) << 4) | d;
+        }
+
+        /// Hands one node to the sink, which owns the layout and the links.
+        inline fn append(
+            self: *Self,
+            parent: ?u32,
+            tag: pool_mod.Tag,
+            payload: pool_mod.Payload,
+        ) Error!u32 {
+            return self.sink.append(parent, tag, payload);
+        }
+
+        fn skipTrivia(self: *Self, start: usize) Error!usize {
+            const input = self.input;
+            var pos = start;
+            if (!self.options.allow_comments) {
+                while (space_table[input[pos]]) pos += 1;
+                return pos;
+            }
+            // A zero padding byte is not whitespace, so this always terminates.
+            while (true) {
+                switch (input[pos]) {
+                    ' ', '\t', '\n', '\r' => pos += 1,
+                    '/' => pos = try self.skipComment(pos),
+                    else => return pos,
+                }
+            }
+        }
+
+        fn skipComment(self: *Self, start: usize) Error!usize {
+            const input = self.input;
+            if (start + 1 >= self.end) return error.InvalidJson;
+            const kind = input[start + 1];
+            var pos = start + 2;
+            if (kind == '/') {
+                while (pos < self.end and input[pos] != '\n' and input[pos] != '\r') pos += 1;
+                return pos;
+            }
+            if (kind != '*') return error.InvalidJson;
+            while (pos + 1 < self.end) : (pos += 1) {
+                if (input[pos] == '*' and input[pos + 1] == '/') return pos + 2;
+            }
+            return error.InvalidJson;
+        }
+    };
+}
 
 /// Test helper: pads `input`, parses it, and hands back the buffer whose bytes
 /// string offsets refer to.

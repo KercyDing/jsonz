@@ -10,11 +10,12 @@ const std = @import("std");
 const common = @import("../common.zig");
 const reader = @import("../reader.zig");
 const NodeMut = @import("NodeMut.zig");
+const storage_mod = @import("storage.zig");
 const Document = @import("../Document/root.zig").Document;
 pub const patch = @import("patch.zig");
 
 /// Node and string storage owned by this document.
-storage: NodeMut.StorageMut,
+storage: storage_mod.StorageMut,
 
 /// What a new document's root is, chosen with `init`.
 ///
@@ -35,12 +36,13 @@ pub fn init(allocator: std.mem.Allocator, kind: RootKind) !DocumentMut {
     return document;
 }
 
-/// Creates a document whose root is `null`, for callers that replace the whole
-/// root anyway, like `clone`.
+/// Creates a document whose root is `null`, for `clone` and `init`, which
+/// replace the whole root right away. A caller that wants a non-container root
+/// starts from `init` and replaces the root node.
 fn initEmpty(allocator: std.mem.Allocator) !DocumentMut {
-    var storage: NodeMut.StorageMut = .{ .allocator = allocator };
+    var storage: storage_mod.StorageMut = .{ .allocator = allocator };
     errdefer storage.nodes.deinit(allocator);
-    storage.root = try NodeMut.createNull(&storage);
+    storage.root = try storage_mod.createNull(&storage);
     return .{ .storage = storage };
 }
 
@@ -59,21 +61,26 @@ pub fn parse(
     @memcpy(buffer[0..input.len], input);
     @memset(buffer[input.len..], 0);
 
-    var storage: NodeMut.StorageMut = .{ .allocator = allocator };
+    var storage: storage_mod.StorageMut = .{ .allocator = allocator };
     errdefer storage.nodes.deinit(allocator);
     errdefer storage.input.deinit(allocator);
-    storage.root = try NodeMut.parseInto(&storage, buffer, input.len, options);
+    storage.root = try storage_mod.parseInto(&storage, buffer, input.len, options);
     return .{ .storage = storage };
 }
 
-/// Deep-copies a compact read-only tree into a new mutable document.
-pub fn fromStorage(
-    allocator: std.mem.Allocator,
-    source: *const common.Storage,
-    root_index: u32,
-) !DocumentMut {
-    return .{ .storage = try NodeMut.fromStorage(allocator, source, root_index) };
-}
+/// Constructor internals. They take the storage layout apart, so they are not
+/// part of the documented API: `Document.toMut` and `DocumentMut.parse` are the
+/// entry points that users need.
+pub const internal = struct {
+    /// Copies a compact read-only tree into a new mutable document.
+    pub fn fromStorage(
+        allocator: std.mem.Allocator,
+        source: *const common.Storage,
+        root_index: u32,
+    ) !DocumentMut {
+        return .{ .storage = try storage_mod.fromStorage(allocator, source, root_index) };
+    }
+};
 
 /// Deep-copies `source` into a new document; the copy shares nothing with it.
 pub fn clone(allocator: std.mem.Allocator, source: *DocumentMut) !DocumentMut {
@@ -102,7 +109,7 @@ pub fn root(self: *DocumentMut) NodeMut {
 /// borrows `*const Storage`, so a `*const Document` has no mutating API at all,
 /// while a `DocumentMut` cannot even be read through a constant pointer.
 pub fn toDocument(self: *DocumentMut, allocator: std.mem.Allocator) std.mem.Allocator.Error!Document {
-    const compact = try NodeMut.toCompact(&self.storage, self.storage.root, allocator);
+    const compact = try storage_mod.toCompact(&self.storage, self.storage.root, allocator);
     var document: Document = .{
         .pool = compact.pool,
         .storage = .{ .nodes = &.{}, .input = compact.input },
@@ -148,32 +155,32 @@ pub fn ptrGetDyn(self: *DocumentMut, ptr: []const u8) common.PointerError!NodeMu
 /// Creates a detached `null` node; attach it with `addField`, `append`, or
 /// `insertAt`.
 pub fn newNull(self: *DocumentMut) !NodeMut {
-    return self.wrap(try NodeMut.createNull(&self.storage));
+    return self.wrap(try storage_mod.createNull(&self.storage));
 }
 
 /// Creates a detached boolean node.
 pub fn newBool(self: *DocumentMut, value: bool) !NodeMut {
-    return self.wrap(try NodeMut.createBool(&self.storage, value));
+    return self.wrap(try storage_mod.createBool(&self.storage, value));
 }
 
 /// Creates a detached number node.
 pub fn newNumber(self: *DocumentMut, value: anytype) !NodeMut {
-    return self.wrap(try NodeMut.createNumber(&self.storage, value));
+    return self.wrap(try storage_mod.createNumber(&self.storage, value));
 }
 
 /// Creates a detached string node.
 pub fn newString(self: *DocumentMut, value: []const u8) !NodeMut {
-    return self.wrap(try NodeMut.createString(&self.storage, value));
+    return self.wrap(try storage_mod.createString(&self.storage, value));
 }
 
 /// Creates a detached empty array node.
 pub fn newArray(self: *DocumentMut) !NodeMut {
-    return self.wrap(try NodeMut.createArray(&self.storage));
+    return self.wrap(try storage_mod.createArray(&self.storage));
 }
 
 /// Creates a detached empty object node.
 pub fn newObject(self: *DocumentMut) !NodeMut {
-    return self.wrap(try NodeMut.createObject(&self.storage));
+    return self.wrap(try storage_mod.createObject(&self.storage));
 }
 
 fn wrap(self: *DocumentMut, index: u32) NodeMut {

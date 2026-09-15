@@ -851,6 +851,15 @@ test "mutable init kinds" {
     // A root holds anything: replace it when the document is not a container.
     try document.root().replaceNumber(@as(u8, 8));
     try expectSerialized(&document, "8");
+
+    // A whole tree can be built detached and swapped in as the root.
+    var fresh = try dom.DocumentMut.init(testing.allocator, .object);
+    defer fresh.deinit();
+
+    const object = try fresh.newObject();
+    try object.addBool("ok", true);
+    try fresh.root().replace(object);
+    try expectSerialized(&fresh, "{\"ok\":true}");
 }
 
 fn expectDocumentJson(document: *dom.Document, expected: []const u8) !void {

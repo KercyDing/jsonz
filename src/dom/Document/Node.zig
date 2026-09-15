@@ -8,15 +8,15 @@ const common = @import("../common.zig");
 const rfc = @import("../rfc.zig");
 
 /// The kind of a DOM value.
-pub const Kind = common.Kind;
+const Kind = common.Kind;
 /// Options that control DOM serialization.
-pub const WriteOptions = common.WriteOptions;
+const WriteOptions = common.WriteOptions;
 /// Errors returned when a node cannot be accessed or converted.
-pub const AccessError = common.AccessError;
+const AccessError = common.AccessError;
 /// Errors from resolving an RFC 6901 JSON Pointer.
-pub const PointerError = common.PointerError;
+const PointerError = common.PointerError;
 /// Numeric types accepted by `Node.toNumber` and `Node.asNumber`.
-pub const NumberType = common.NumberType;
+const NumberType = common.NumberType;
 /// The parsed storage behind every `Node`.
 pub const Storage = common.Storage;
 storage: *const Storage,

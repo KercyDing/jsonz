@@ -40,7 +40,7 @@ pub fn root(self: *const Document) Node {
 /// Copies this document into a new mutable document. The original stays
 /// valid; the mutable tree owns its own nodes and strings.
 pub fn toMut(self: *const Document, allocator: std.mem.Allocator) std.mem.Allocator.Error!document_mut.DocumentMut {
-    return document_mut.DocumentMut.fromStorage(allocator, &self.storage, self.root_index);
+    return document_mut.fromStorage(allocator, &self.storage, self.root_index);
 }
 
 /// Returns the kind of the root node.

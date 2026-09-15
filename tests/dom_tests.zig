@@ -553,6 +553,26 @@ test "mutable deep copy" {
     try testing.expectEqualStrings(input, output);
 }
 
+test "mutable document lifecycle" {
+    var document = try dom.DocumentMut.init(testing.allocator);
+    defer document.deinit();
+    try expectSerialized(&document, "null");
+
+    // Build a fresh document and splice a new root in.
+    const root = try document.newObject();
+    try root.addString("k", "v");
+    try document.root().replace(root);
+    try expectSerialized(&document, "{\"k\":\"v\"}");
+
+    // A clone is an independent deep copy.
+    var copy = try dom.DocumentMut.clone(testing.allocator, &document);
+    defer copy.deinit();
+    try expectSerialized(&copy, "{\"k\":\"v\"}");
+    try (try copy.root().field("k")).replaceString("other");
+    try expectSerialized(&copy, "{\"k\":\"other\"}");
+    try expectSerialized(&document, "{\"k\":\"v\"}");
+}
+
 fn expectSerialized(document: *dom.DocumentMut, expected: []const u8) !void {
     const output = try document.toSlice(testing.allocator, .{});
     defer testing.allocator.free(output);

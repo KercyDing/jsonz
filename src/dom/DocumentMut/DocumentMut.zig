@@ -13,13 +13,29 @@ const NodeMut = @import("NodeMut.zig");
 /// Node and string storage owned by this document.
 storage: NodeMut.StorageMut,
 
-/// Copies a compact read-only tree into a new mutable document.
+/// Creates a document whose root is `null`, ready to be filled by editing.
+pub fn init(allocator: std.mem.Allocator) !DocumentMut {
+    var storage: NodeMut.StorageMut = .{ .allocator = allocator };
+    errdefer storage.nodes.deinit(allocator);
+    storage.root = try NodeMut.createNull(&storage);
+    return .{ .storage = storage };
+}
+
+/// Deep-copies a compact read-only tree into a new mutable document.
 pub fn fromStorage(
     allocator: std.mem.Allocator,
     source: *const common.Storage,
     root_index: u32,
 ) !DocumentMut {
     return .{ .storage = try NodeMut.fromStorage(allocator, source, root_index) };
+}
+
+/// Deep-copies `source` into a new document; the copy shares nothing with it.
+pub fn clone(allocator: std.mem.Allocator, source: *DocumentMut) !DocumentMut {
+    var copy = try init(allocator);
+    errdefer copy.deinit();
+    try copy.root().copyFrom(source.root());
+    return copy;
 }
 
 /// Releases all node and string storage.

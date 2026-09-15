@@ -2,7 +2,7 @@
 
 A high-performance JSON document library for Zig.
 
-- `jsonz.dom` provides a native DOM — a compact read-only `Document` and an
+- `jsonz.dom` provides a native DOM — a read-only `Document` and an
   editable `DocumentMut`, with
   [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer and
   [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch.
@@ -34,6 +34,8 @@ const jsonz = b.dependency("jsonz", .{
 
 exe.root_module.addImport("jsonz", jsonz.module("jsonz"));
 ```
+
+See [API.md](API.md) for the full public API, ownership rules, and error values.
 
 ## Quick Start
 
@@ -117,9 +119,9 @@ const other_node = try document.ptrGetDyn(pointer_from_user);
 
 ### Mutable DOM
 
-`Document` is compact and read-only, which keeps parsing and querying fast.
-When a document has to change, copy it into a `DocumentMut` — or parse straight
-into one with `jsonz.dom.parseMut` — and edit that:
+`Document` is read-only. When a document has to change, copy it into a
+`DocumentMut` — or parse straight into one with `jsonz.dom.parseMut` — and edit
+that:
 
 ```zig
 var mutable = try document.toMut(allocator);
@@ -143,43 +145,16 @@ old.remove();
 const edited = try mutable.toSlice(allocator, .{ .pretty = true });
 ```
 
-`NodeMut` is a handle to one node of the document: taking one copies nothing,
-and every edit goes through the document it came from. Reading works exactly
-like `Node`, JSON Pointer included, so an edited value can be reached with
-`mutable.ptrGet("/user/name")` just as it can be with `document.ptrGet(...)`.
+`NodeMut` is a borrowed handle into a `DocumentMut`. It has the same read
+methods as `Node` and adds editing methods such as `replaceNumber`, `addField`,
+`appendString`, `insertAt`, `remove`, and `copyFrom`.
 
-`DocumentMut` owns its nodes, so it borrows nothing from the caller and the
-original `Document` stays valid and unchanged.
+Create new values with `DocumentMut.new*`, then attach them to the tree. Nodes
+belong to one document; use `copyFrom` when copying a value from another
+`DocumentMut`. Call `deinit` when the document is no longer needed.
 
-Editing methods split into three groups:
-
-- **In place** — `replaceNull`, `replaceBool`, `replaceNumber`, `replaceString`
-  change a node's value but keep its position.
-- **Structure** — `addField`, `append` and `insertAt` attach a node; `remove`
-  detaches one; `replace` splices a detached node into the node's own slot.
-  `addNull` / `addBool` / `addNumber` / `addString` and `appendNull` /
-  `appendBool` / `appendNumber` / `appendString` are shorthands that build the
-  value node for you.
-- **Copy** — `copyFrom` deep-copies a subtree, including one from another
-  document.
-
-New nodes come from `DocumentMut.newNull` / `newBool` / `newNumber` /
-`newString` / `newArray` / `newObject`, and start out detached. Attaching a node
-that is already linked into a tree fails with `error.AlreadyAttached`, and a
-node from another document fails with `error.DifferentStorage`; use `copyFrom`
-to move data across documents.
-
-Storage is append-only: `remove` detaches a subtree in constant time but does
-not reclaim its nodes, so a detached subtree stays valid, keeps accepting
-edits, and can be attached somewhere else. `deinit` releases everything the
-document allocated, so call it when the document's lifecycle ends.
-
-`toDocument` freezes an edited document into a compact, read-only one. A `Node`
-borrows `*const Storage`, so a `*const Document` has no mutating API at all,
-while a `DocumentMut` cannot even be read through a constant pointer; give the
-frozen form to whoever must not be able to change it.
-
-Editing never overflows the stack, however deep the document is.
+`toDocument` creates an independent read-only copy after editing. Use it when
+you want to publish a stable snapshot for code that should not modify the JSON.
 
 ### JSON Patch
 
@@ -234,28 +209,8 @@ config.json:3:18: error: expected ',' or ']', found '"'
 
 ## Thread safety
 
-`Document` is immutable once parsed, so it can be shared across threads: `Node`
-views borrow `*const Storage`, and nothing in the read-only API writes to the
-document. The owner still decides when `deinit` runs, so readers must be done
-before it does.
-
-`DocumentMut` owns mutable state and is not thread-safe. It does no locking, and
-a `NodeMut` handle can write through the document's storage, so sharing one
-between threads needs synchronization from the caller.
-
-The usual shape is to edit through a `DocumentMut` and publish immutable
-snapshots as `Document`s. `toDocument` returns a deep copy that shares nothing
-with the source, so readers on other threads are unaffected by later edits.
-
-Two documents share nothing, so every thread can hold its own; the allocator you
-hand them is the only shared object, and it follows its own thread-safety rules.
-`jsonz.typed` and `jsonz.diagnostic` keep no state at all: they read their input
-and write their output.
-
-## API
-
-See [API.md](API.md) for the full API reference: options, types, methods and
-error values. The Zig source remains the source of truth.
+`Document` can be shared for reading while it is alive. `DocumentMut` is not
+thread-safe; synchronize access when sharing it between threads.
 
 ## Development
 

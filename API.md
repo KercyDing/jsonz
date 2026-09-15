@@ -5,7 +5,6 @@ A quick reference for the Zig API. The Zig source remains the source of truth.
 ## Contents
 
 - [Rules](#rules)
-- [Module layout](#module-layout)
 - [Public types](#public-types)
 - [`jsonz.typed`](#jsonztyped)
 - [`jsonz.dom`](#jsonzdom)
@@ -61,14 +60,6 @@ the document; the caller's buffer can be freed right after parsing.
 
 Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 `ParseError` covers parsing; serialization returns allocator and IO errors.
-
-## Module layout
-
-| Module | Purpose |
-| --- | --- |
-| `jsonz.typed` | Parse and serialize known Zig types. |
-| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy, with [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch as `DocumentMut.patch`. |
-| `jsonz.diagnostic` | Report the first JSON syntax error. |
 
 ## Public types
 
@@ -128,7 +119,9 @@ borrowed storage alive.
 | `.toWriter(writer, options)` | Serialize `.value`. |
 
 `T` may define `jsonzDeserialize` / `jsonzSerialize` hooks for custom
-representations. See `src/typed/deserialize.zig`.
+representations. A deserialize hook receives an allocator and a deserializer;
+a serialize hook receives a serializer. Both expose methods for reading or
+writing JSON values.
 
 ### Parse options
 
@@ -157,43 +150,6 @@ representations. See `src/typed/deserialize.zig`.
 | `dom.parseBufferSize(input_len, options)` | `usize` | Storage size required by `parseInto`. |
 | `Document.toMut(allocator)` | `Allocator.Error!DocumentMut` | Copy into an editable document. |
 | `dom.parseMut(allocator, input, options)` | `ParseError!DocumentMut` | Parse straight into an editable document. |
-
-For workloads that parse many documents in one process,
-`std.heap.c_allocator` is recommended because it reuses freed heap blocks
-efficiently. Link libc to use it:
-
-```zig
-exe.root_module.link_libc = true;
-const allocator = std.heap.c_allocator;
-```
-
-### Source layout
-
-`jsonz.dom` is two independent models over one shared vocabulary:
-
-```text
-src/dom/
-  root.zig          the jsonz.dom module: re-exports both models
-  common.zig        Kind, NumberType, AccessError, PointerError, WriteOptions, Storage
-  pool.zig          the compact node pool
-  reader.zig        the JSON reader shared by both models
-  rfc.zig           RFC 6901 JSON Pointer resolution
-  encode.zig        scalar encoding shared by both writers
-  Document/
-    root.zig        the read-only model's exports
-    Document.zig    the Document type: parse, access, pointer, serialize
-    Node.zig        the Node view and the storage it borrows
-    writer.zig      compact traversal
-  DocumentMut/
-    root.zig        the mutable model's exports
-    DocumentMut.zig the DocumentMut type: root, serialize, pointer, new*
-    NodeMut.zig     the linked node, its storage, edits and traversal
-    patch.zig       RFC 6902 JSON Patch over the edits above
-```
-
-Each model is reached through its own `root.zig`; neither reaches into the
-other's internals. `DocumentMut` reads the compact storage through the shared
-`Storage`, so the conversion depends on shared types only.
 
 ### Parse options
 
@@ -321,16 +277,12 @@ a subtree built detached - is made by replacing it, e.g. with
 | `deinit()` | Release the node and string storage. |
 | `root()` | The root `NodeMut`. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
-| `toDocument(allocator)` | Copy the document into a compact, read-only `Document`. |
+| `toDocument(allocator)` | Copy the document into an independent, read-only `Document`. |
 | `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer, with the same semantics as `Document`. |
 | `newNull()`, `newBool(value)`, `newNumber(value)`, `newString(value)`, `newArray()`, `newObject()` | Create a detached node to attach later. |
 
-`toDocument(allocator)` goes the other way: it freezes the edited document into
-a compact, read-only `Document`. The copy is deep, so the frozen document stays
-valid after this one is freed, and only the nodes the tree still holds are
-copied. Freezing is how a finished document is shared for reading: `Node`
-borrows `*const Storage`, so a `*const Document` has no mutating API at all,
-while a `DocumentMut` cannot even be *read* through a constant pointer.
+`toDocument(allocator)` creates an independent read-only `Document`. The copy
+stays valid after the mutable document is freed, and exposes only read operations.
 
 ```zig
 var mutable = try jsonz.dom.parseMut(allocator, input, .{});
@@ -344,10 +296,8 @@ defer frozen.deinit();
 // `frozen` is a plain `Document`: hand out `&frozen` and nothing can change it.
 ```
 
-`newNumber` takes a Zig integer or float: a signed integer is stored as a
-negative-capable number, an unsigned integer as an unsigned one, and a float as
-a real. The same limits as `replaceNumber` apply, so an integer that does not
-fit, or a NaN or an infinity, reports `error.OutOfRange`.
+`newNumber` accepts Zig integers and floats. Values that cannot be represented
+in JSON report `error.OutOfRange`.
 
 ### `NodeMut`
 
@@ -357,8 +307,8 @@ fit, or a NaN or an infinity, reports `error.OutOfRange`.
 names, arguments, and errors. It adds the editing methods below.
 
 Detached nodes are what editors attach. Create them with the `DocumentMut.new*`
-methods. Every editing method takes the document's own storage as a given; a
-node from a different `DocumentMut` reports `error.DifferentStorage`.
+methods. Editing methods require a node from the same `DocumentMut`; a node from a
+different document reports `error.DifferentStorage`.
 
 | Method | Effect |
 | --- | --- |
@@ -381,45 +331,33 @@ node from a different `DocumentMut` reports `error.DifferentStorage`.
 | `appendString(value)` | Append a string array element. |
 | `insertAt(index, value)` | Insert an array element at `index`; `index == len` appends. |
 
-`addNull` and friends are shorthands: they create the value node and append the
-member or element, exactly like `addField` and `append` with a node from
-`DocumentMut.newNull` and friends.
+Convenience methods create the value and attach it in one call:
 
-Storage is append-only, so the document is a good fit for a document's whole
-lifecycle, not for a stream of unrelated documents:
+| Methods | Equivalent operation |
+| --- | --- |
+| `addNull`, `addBool`, `addNumber`, `addString` | `new*` + `addField` |
+| `appendNull`, `appendBool`, `appendNumber`, `appendString` | `new*` + `append` |
 
-- `remove` detaches in constant time and does not reclaim nodes.
-- A detached subtree stays valid and editable, and can be attached again.
-- `deinit` releases everything the document allocated.
+### Mutation behavior
 
-`replaceNull`, `replaceBool` and `remove` cannot fail. `replaceNumber` reports
-`error.OutOfRange` for an integer that does not fit the document's `i64`/`u64`
-storage, and for a float JSON cannot carry at all (a NaN or an infinity);
-`replaceString` only runs out of memory. `copyFrom` only returns allocation
-errors. The methods that attach a node
-return `MutateError`: `error.AlreadyAttached` when the node is still linked
-into a tree (including attaching a node to itself), `error.DifferentStorage`
-when it belongs to another document, `error.WouldCycle` when the attach would
-make the node its own descendant, `error.UnexpectedType` when the container
-kind is wrong, and `error.OutOfBounds` when an `insertAt` index is past the
-end. A failed attach leaves the document unchanged.
+| Operation | Behavior |
+| --- | --- |
+| `remove()` | Detaches the node; removing an object value also removes its key. Removing the root does nothing. |
+| `replace*()` / `replace()` | Keeps the node's position and changes its value. |
+| `copyFrom()` | Copies a subtree, including from another document. |
+| Duplicate object key | Appends another member; lookup returns the first one. |
+| Detached node | Remains valid and can be attached again. |
 
-The cycle check walks from the target up to the root, so an attach costs the
-document's depth. The other checks are constant time.
+### Mutation errors
 
-Details worth knowing:
-
-- An object member is one key/value pair, so `remove` on a member value takes
-  its key with it.
-- `remove` on the root, or on a node that is already detached, does nothing.
-- Adding a key that already exists appends a second member; lookups return the
-  first match, like a parser resolving duplicate member names.
-- `insertAt(len)` appends, and any larger index reports `error.OutOfBounds`.
-- The `replace*` methods and `replace` change only the value. Children a
-  container used to have become unreachable; their storage is freed by
-  `deinit`, not by the edit.
-- `copyFrom` is iterative, so copying a very deep subtree cannot overflow the
-  stack, and the source may belong to another document.
+| Error | Cause |
+| --- | --- |
+| `AlreadyAttached` | The node is already in a tree, including the target itself. |
+| `DifferentStorage` | The node belongs to another document. |
+| `WouldCycle` | The operation would create a cycle. |
+| `UnexpectedType` | The target is not the required container kind. |
+| `OutOfBounds` | `insertAt` is past the end of the array. |
+| `OutOfRange` | A number cannot be represented in JSON. |
 
 ### JSON Pointer
 
@@ -429,12 +367,9 @@ Details worth knowing:
 | `ptrGetFmt("/users/{}/id", .{index})` | `PointerError!Node` | Comptime format plus runtime arguments. |
 | `ptrGetDyn(ptr)` | `PointerError!Node` | A complete pointer known only at runtime. |
 
-`ptrGet` checks syntax, escapes and UTF-8 at compile time and splits tokens
-there. `ptrGetFmt` expands its format with `std.fmt` semantics into a fixed
-stack buffer, so interpolation is textual and never escapes anything: a `/` in
-an interpolated value separates tokens, and an object member containing `/` or
-`~` must be written as `~1` and `~0` by hand. `error.PointerTooLong` is reported
-when a formatted pointer does not fit the buffer.
+`ptrGet` checks syntax, escapes and UTF-8 at compile time. `ptrGetFmt` uses
+textual interpolation and does not escape interpolated values; write `/` and `~`
+as `~1` and `~0` when they belong to an object key.
 
 A token is an object member or an array index depending on the node it meets, as
 [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) requires. `~1` decodes to
@@ -566,7 +501,7 @@ so that stream decides; `toSlice` returns plain text.
 | --- | --- |
 | `InvalidPointer` | Malformed pointer, invalid escape, or invalid UTF-8. |
 | `InvalidArrayIndex` | A token that is not an RFC 6901 array index. |
-| `PointerTooLong` | A `ptrGetFmt` result does not fit the stack buffer. |
+| `PointerTooLong` | A formatted pointer is too long. |
 
 `MutateError` is `Allocator.Error` plus `AccessError` plus:
 

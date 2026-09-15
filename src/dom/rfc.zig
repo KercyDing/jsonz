@@ -6,20 +6,14 @@
 //! keys match by exact code point, without Unicode normalization.
 
 const std = @import("std");
-const view_mod = @import("view.zig");
-
-const DocView = view_mod.DocView;
+const common = @import("common.zig");
 
 /// Errors from resolving a JSON Pointer: the access errors plus the pointer's
 /// own syntax and evaluation failures.
-pub const PointerError = view_mod.AccessError || error{
-    InvalidPointer,
-    InvalidArrayIndex,
-    PointerTooLong,
-};
+pub const PointerError = common.PointerError;
 
 /// Resolves a runtime RFC 6901 JSON Pointer.
-pub fn resolve(root: DocView, pointer: []const u8) PointerError!DocView {
+pub fn resolve(root: anytype, pointer: []const u8) PointerError!@TypeOf(root) {
     if (pointer.len == 0) return root;
     if (pointer[0] != '/') return error.InvalidPointer;
     if (!std.unicode.utf8ValidateSlice(pointer)) return error.InvalidPointer;
@@ -39,7 +33,7 @@ pub fn resolve(root: DocView, pointer: []const u8) PointerError!DocView {
 /// checked while compiling, and each token's array-index interpretation is
 /// prepared there. Whether a token is an index or a member still depends on the
 /// node kind it meets at runtime.
-pub fn resolveStatic(root: DocView, comptime pointer: []const u8) PointerError!DocView {
+pub fn resolveStatic(root: anytype, comptime pointer: []const u8) PointerError!@TypeOf(root) {
     comptime validateComptime(pointer);
     var current = root;
     inline for (comptime segments(pointer)) |segment| {
@@ -52,7 +46,7 @@ pub fn resolveStatic(root: DocView, comptime pointer: []const u8) PointerError!D
 /// `std.fmt` semantics into a fixed stack buffer, so interpolation is textual
 /// and never escapes anything, and the common pointer never allocates. A
 /// formatted pointer longer than the buffer reports `error.PointerTooLong`.
-pub fn resolveFmt(root: DocView, comptime fmt: []const u8, args: anytype) PointerError!DocView {
+pub fn resolveFmt(root: anytype, comptime fmt: []const u8, args: anytype) PointerError!@TypeOf(root) {
     var buffer: [4096]u8 = undefined;
     const pointer = std.fmt.bufPrint(&buffer, fmt, args) catch return error.PointerTooLong;
     return resolve(root, pointer);
@@ -70,7 +64,7 @@ const Segment = struct {
     escaped: bool,
 };
 
-fn descendToken(current: DocView, token: []const u8) PointerError!DocView {
+fn descendToken(current: anytype, token: []const u8) PointerError!@TypeOf(current) {
     if (current.isObject()) return objectLookup(current, token);
     if (!current.isArray()) return error.UnexpectedType;
     if (std.mem.eql(u8, token, "-")) return error.OutOfBounds;
@@ -78,9 +72,9 @@ fn descendToken(current: DocView, token: []const u8) PointerError!DocView {
     return current.getAt(index) orelse error.OutOfBounds;
 }
 
-inline fn descendSegment(current: DocView, segment: Segment) PointerError!DocView {
+inline fn descendSegment(current: anytype, segment: Segment) PointerError!@TypeOf(current) {
     if (current.isObject()) {
-        if (!segment.escaped) return view_mod.getObjectUnchecked(current, segment.token) orelse error.MissingField;
+        if (!segment.escaped) return current.get(segment.token) orelse error.MissingField;
         return objectLookupEscaped(current, segment.token);
     }
     if (!current.isArray()) return error.UnexpectedType;
@@ -91,15 +85,15 @@ inline fn descendSegment(current: DocView, segment: Segment) PointerError!DocVie
 
 /// Looks up the first object member whose name matches the token. Duplicate
 /// member names resolve to the first one, like the native parsers.
-inline fn objectLookup(current: DocView, token: []const u8) PointerError!DocView {
+inline fn objectLookup(current: anytype, token: []const u8) PointerError!@TypeOf(current) {
     if (std.mem.indexOfScalar(u8, token, '~') == null) {
-        return view_mod.getObjectUnchecked(current, token) orelse error.MissingField;
+        return current.get(token) orelse error.MissingField;
     }
     return objectLookupEscaped(current, token);
 }
 
 /// The slow path for tokens that contain `~0`/`~1` escapes.
-fn objectLookupEscaped(current: DocView, token: []const u8) PointerError!DocView {
+fn objectLookupEscaped(current: anytype, token: []const u8) PointerError!@TypeOf(current) {
     var iterator = current.objectIterator() catch unreachable;
     while (iterator.next()) |entry| {
         if (tokenEql(entry.key, token)) return entry.value;

@@ -58,13 +58,13 @@ pub const Payload = extern union {
 };
 
 /// One 16-byte DOM node: a tag and a payload.
-pub const Node = extern struct {
+pub const NodeData = extern struct {
     tag: Tag = .{ .type = .none },
     payload: Payload = .{ .uint = 0 },
 };
 
 /// The size of one node.
-pub const node_size = @sizeOf(Node);
+pub const node_size = @sizeOf(NodeData);
 
 /// Packs a type, subtype, and length into a tag.
 pub fn makeTag(node_type: Type, subtype: Subtype, len: usize) Tag {
@@ -75,15 +75,15 @@ pub fn makeTag(node_type: Type, subtype: Subtype, len: usize) Tag {
     };
 }
 
-pub fn nodeType(node: Node) Type {
+pub fn nodeType(node: NodeData) Type {
     return node.tag.type;
 }
 
-pub fn nodeSubtype(node: Node) Subtype {
+pub fn nodeSubtype(node: NodeData) Subtype {
     return node.tag.subtype;
 }
 
-pub fn nodeLen(node: Node) usize {
+pub fn nodeLen(node: NodeData) usize {
     return node.tag.len;
 }
 
@@ -98,7 +98,7 @@ pub fn indexAtOffset(from: u32, offset: u64) u32 {
     return from + @as(u32, @intCast(offset / node_size));
 }
 
-/// Node storage for one document.
+/// NodeData storage for one document.
 ///
 /// Nodes live in one contiguous, depth-first array: a container's children
 /// start at the next index, and `payload.offset` skips to the node after a
@@ -108,7 +108,7 @@ pub const Pool = struct {
     /// Null for caller-provided storage, which `deinit` must not free.
     allocator: ?std.mem.Allocator = null,
     /// The allocated capacity; `len` says how much of it is used.
-    buffer: []Node = &.{},
+    buffer: []NodeData = &.{},
     len: usize = 0,
 
     /// Creates a growing pool sized for `input_len` bytes of JSON.
@@ -119,19 +119,19 @@ pub const Pool = struct {
         const estimate = input_len / ratio + 4;
         return .{
             .allocator = allocator,
-            .buffer = try allocator.alloc(Node, estimate),
+            .buffer = try allocator.alloc(NodeData, estimate),
         };
     }
 
     /// Uses `storage` as fixed-capacity node storage without owning it.
     ///
-    /// The region is aligned up to `Node` alignment; the returned pool cannot
+    /// The region is aligned up to `NodeData` alignment; the returned pool cannot
     /// grow.
     pub fn initFixed(storage: []u8) Pool {
         const address = @intFromPtr(storage.ptr);
-        const aligned = std.mem.alignForward(usize, address, @alignOf(Node));
+        const aligned = std.mem.alignForward(usize, address, @alignOf(NodeData));
         if (aligned - address >= storage.len) return .{};
-        const nodes: [*]Node = @ptrFromInt(aligned);
+        const nodes: [*]NodeData = @ptrFromInt(aligned);
         const count = (storage.len - (aligned - address)) / node_size;
         return .{ .buffer = nodes[0..count] };
     }
@@ -142,11 +142,11 @@ pub const Pool = struct {
     }
 
     /// The nodes appended so far.
-    pub fn items(self: *const Pool) []const Node {
+    pub fn items(self: *const Pool) []const NodeData {
         return self.buffer[0..self.len];
     }
 
-    pub fn append(self: *Pool, node: Node) !u32 {
+    pub fn append(self: *Pool, node: NodeData) !u32 {
         if (self.len == self.buffer.len) try self.grow();
         const index = std.math.cast(u32, self.len) orelse error.OutOfMemory;
         self.buffer[self.len] = node;
@@ -154,11 +154,11 @@ pub const Pool = struct {
         return index;
     }
 
-    pub fn at(self: *const Pool, index: u32) *const Node {
+    pub fn at(self: *const Pool, index: u32) *const NodeData {
         return &self.buffer[index];
     }
 
-    pub fn atMut(self: *Pool, index: u32) *Node {
+    pub fn atMut(self: *Pool, index: u32) *NodeData {
         return &self.buffer[index];
     }
 
@@ -170,14 +170,14 @@ pub const Pool = struct {
 };
 
 test "node layout" {
-    try std.testing.expectEqual(@as(usize, 16), @sizeOf(Node));
-    try std.testing.expectEqual(@as(usize, 8), @alignOf(Node));
-    try std.testing.expectEqual(@as(usize, 0), @offsetOf(Node, "tag"));
-    try std.testing.expectEqual(@as(usize, 8), @offsetOf(Node, "payload"));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(NodeData));
+    try std.testing.expectEqual(@as(usize, 8), @alignOf(NodeData));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(NodeData, "tag"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(NodeData, "payload"));
 }
 
 test "tag fields" {
-    const node = Node{ .tag = makeTag(.number, .real, 42), .payload = .{ .float = 1.5 } };
+    const node = NodeData{ .tag = makeTag(.number, .real, 42), .payload = .{ .float = 1.5 } };
     try std.testing.expectEqual(Type.number, nodeType(node));
     try std.testing.expectEqual(Subtype.real, nodeSubtype(node));
     try std.testing.expectEqual(@as(usize, 42), nodeLen(node));
@@ -202,7 +202,7 @@ test "pool growth" {
 }
 
 test "fixed pool" {
-    var storage: [4]Node align(@alignOf(Node)) = undefined;
+    var storage: [4]NodeData align(@alignOf(NodeData)) = undefined;
     var pool = Pool.initFixed(std.mem.asBytes(&storage));
     try std.testing.expectEqual(@as(usize, 4), pool.buffer.len);
     for (0..4) |_| {

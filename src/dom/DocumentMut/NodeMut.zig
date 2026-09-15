@@ -407,31 +407,74 @@ pub fn addField(self: NodeMut, key: []const u8, value: NodeMut) MutateError!void
     self.raw().tag.len += 1;
 }
 
+/// Appends an object member whose value is `null`.
+pub fn addNull(self: NodeMut, key: []const u8) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    return self.addMember(key, try createNull(self.storage));
+}
+
+/// Appends an object member whose value is a boolean.
+pub fn addBool(self: NodeMut, key: []const u8, value: bool) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    return self.addMember(key, try createBool(self.storage, value));
+}
+
+/// Appends an object member whose value is a number.
+pub fn addNumber(self: NodeMut, key: []const u8, value: anytype) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    return self.addMember(key, try createNumber(self.storage, value));
+}
+
 /// Appends an object member whose value is a string.
 pub fn addString(self: NodeMut, key: []const u8, value: []const u8) !void {
     if (!self.isObject()) return error.UnexpectedType;
-    const key_index = try storeStringNode(self.storage, key);
-    const value_index = try storeStringNode(self.storage, value);
-    linkChild(self.storage, self.index, key_index);
-    linkChild(self.storage, self.index, value_index);
-    setMemberValue(&self.storage.nodes.items[value_index], true);
-    self.raw().tag.len += 1;
+    return self.addMember(key, try storeStringNode(self.storage, value));
 }
 
 /// Appends an array element. `value` must be a detached node of this document.
 pub fn append(self: NodeMut, value: NodeMut) MutateError!void {
     if (!self.isArray()) return error.UnexpectedType;
     try checkAttachable(self, value);
-    linkChild(self.storage, self.index, value.index);
-    setMemberValue(&self.storage.nodes.items[value.index], false);
-    self.raw().tag.len += 1;
+    self.appendChild(value.index);
+}
+
+/// Appends a `null` array element.
+pub fn appendNull(self: NodeMut) !void {
+    if (!self.isArray()) return error.UnexpectedType;
+    self.appendChild(try createNull(self.storage));
+}
+
+/// Appends a boolean array element.
+pub fn appendBool(self: NodeMut, value: bool) !void {
+    if (!self.isArray()) return error.UnexpectedType;
+    self.appendChild(try createBool(self.storage, value));
+}
+
+/// Appends a number array element.
+pub fn appendNumber(self: NodeMut, value: anytype) !void {
+    if (!self.isArray()) return error.UnexpectedType;
+    self.appendChild(try createNumber(self.storage, value));
 }
 
 /// Appends a string array element.
 pub fn appendString(self: NodeMut, value: []const u8) !void {
     if (!self.isArray()) return error.UnexpectedType;
-    const index = try storeStringNode(self.storage, value);
-    linkChild(self.storage, self.index, index);
+    self.appendChild(try storeStringNode(self.storage, value));
+}
+
+/// Links a key and a freshly created value into this object.
+fn addMember(self: NodeMut, key: []const u8, value_index: u32) !void {
+    const key_index = try storeStringNode(self.storage, key);
+    linkChild(self.storage, self.index, key_index);
+    linkChild(self.storage, self.index, value_index);
+    setMemberValue(&self.storage.nodes.items[value_index], true);
+    self.raw().tag.len += 1;
+}
+
+/// Links a freshly created value into this array.
+fn appendChild(self: NodeMut, value_index: u32) void {
+    linkChild(self.storage, self.index, value_index);
+    setMemberValue(&self.storage.nodes.items[value_index], false);
     self.raw().tag.len += 1;
 }
 

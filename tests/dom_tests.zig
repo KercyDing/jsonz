@@ -497,17 +497,26 @@ test "mutable edits" {
     try testing.expectError(error.OutOfRange, a.replaceNumber(std.math.nan(f64)));
     a.replaceNull();
 
-    // Attach detached nodes and inline strings.
+    // Attach scalar values with the shorthands, and detached nodes as they are.
     try root.addString("c", "x");
-    try root.addField("d", try mutable.newString("y"));
-    const b = try root.field("b");
-    try b.appendString("30");
-    try b.append(try mutable.newNumber(@as(i32, 40)));
-    try b.insertAt(0, try mutable.newObject());
-    try (try b.at(0)).addField("k", try mutable.newBool(true));
-    try b.insertAt(1, try mutable.newNull());
+    try root.addNumber("d", @as(i32, 40));
+    try root.addBool("e", true);
+    try root.addNull("f");
+    try root.addField("g", try mutable.newString("y"));
 
-    try expectSerialized(&mutable, "{\"a\":null,\"b\":[{\"k\":true},null,10,20,\"30\",40],\"c\":\"x\",\"d\":\"y\"}");
+    const b = try root.field("b");
+    try b.insertAt(0, try mutable.newObject());
+    try b.insertAt(1, try mutable.newNull());
+    try (try b.at(0)).addField("k", try mutable.newBool(true));
+    try b.appendString("30");
+    try b.appendNumber(@as(i32, 40));
+    try b.appendBool(false);
+    try b.appendNull();
+
+    try expectSerialized(
+        &mutable,
+        "{\"a\":null,\"b\":[{\"k\":true},null,10,20,\"30\",40,false,null],\"c\":\"x\",\"d\":40,\"e\":true,\"f\":null,\"g\":\"y\"}",
+    );
     try expectSerializedPretty(&mutable);
 }
 
@@ -581,6 +590,29 @@ test "mutable attach errors" {
 
     // The failed operations must not have changed the document.
     try expectSerialized(&mutable, "{\"arr\":[[1],2]}");
+}
+
+test "mutable detached nodes" {
+    var document = try dom.parse(testing.allocator, "{\"a\":[1,2],\"b\":{}}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // Removing detaches the subtree: its storage stays until `deinit`, and the
+    // handle keeps working.
+    const list = try root.field("a");
+    list.remove();
+    try testing.expect(root.get("a") == null);
+    try list.appendNumber(@as(u8, 3));
+    try testing.expectEqual(@as(usize, 3), try list.len());
+
+    // A detached subtree can be attached somewhere else, and edits through the
+    // old handle reach it there.
+    try (try root.field("b")).addField("moved", list);
+    try expectSerialized(&mutable, "{\"b\":{\"moved\":[1,2,3]}}");
+    try list.appendString("x");
+    try expectSerialized(&mutable, "{\"b\":{\"moved\":[1,2,3,\"x\"]}}");
 }
 
 test "mutable attach cycles" {

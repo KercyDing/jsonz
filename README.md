@@ -135,7 +135,7 @@ const tags = try root.field("tags");
 try tags.appendString("dom");
 
 const age = try root.field("age");
-age.replaceNumber(@as(u8, 3));
+try age.replaceNumber(@as(u8, 3));
 
 const old = try root.field("old");
 old.remove();

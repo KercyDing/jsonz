@@ -323,7 +323,8 @@ not re-parse or re-serialize anything.
 
 `newNumber` takes a Zig integer or float: a signed integer is stored as a
 negative-capable number, an unsigned integer as an unsigned one, and a float as
-a real.
+a real. The same limits as `replaceNumber` apply, so an integer that does not
+fit, or a NaN or an infinity, reports `error.OutOfRange`.
 
 ### `NodeMut`
 
@@ -351,8 +352,11 @@ node from a different `DocumentMut` reports `error.DifferentStorage`.
 | `appendString(value)` | Append a string array element. |
 | `insertAt(index, value)` | Insert an array element at `index`; `index == len` appends. |
 
-`replace*` and `remove` cannot fail beyond allocation in `replaceString`.
-`copyFrom` only returns allocation errors. The methods that attach a node
+`replaceNull`, `replaceBool` and `remove` cannot fail. `replaceNumber` reports
+`error.OutOfRange` for an integer that does not fit the document's `i64`/`u64`
+storage, and for a float JSON cannot carry at all (a NaN or an infinity);
+`replaceString` only runs out of memory. `copyFrom` only returns allocation
+errors. The methods that attach a node
 return `MutateError`: `error.AlreadyAttached` when the node is still linked
 into a tree (including attaching a node to itself), `error.DifferentStorage`
 when it belongs to another document, `error.WouldCycle` when the attach would
@@ -511,7 +515,7 @@ so that stream decides; `toSlice` returns plain text.
 | Value | Cause |
 | --- | --- |
 | `UnexpectedType` | The node is not the requested JSON kind. |
-| `OutOfRange` | The number does not fit the requested type. |
+| `OutOfRange` | A number does not fit the requested or the stored type. |
 | `MissingField` | The object member is absent. |
 | `OutOfBounds` | The array index is past the end. |
 

@@ -347,10 +347,27 @@ node from a different `DocumentMut` reports `error.DifferentStorage`.
 | `replace(value)` | Splice a detached node into this node's position; this node becomes detached. |
 | `copyFrom(source)` | Deep-copy `source` into this node, keeping this node's position. `source` may belong to another document. |
 | `addField(key, value)` | Append an object member. |
+| `addNull(key)` | Append an object member whose value is `null`. |
+| `addBool(key, value)` | Append an object member whose value is a boolean. |
+| `addNumber(key, value)` | Append an object member whose value is a number. |
 | `addString(key, value)` | Append an object member whose value is a string. |
 | `append(value)` | Append an array element. |
+| `appendNull()` | Append a `null` array element. |
+| `appendBool(value)` | Append a boolean array element. |
+| `appendNumber(value)` | Append a number array element. |
 | `appendString(value)` | Append a string array element. |
 | `insertAt(index, value)` | Insert an array element at `index`; `index == len` appends. |
+
+`addNull` and friends are shorthands: they create the value node and append the
+member or element, exactly like `addField` and `append` with a node from
+`DocumentMut.newNull` and friends.
+
+Storage is append-only, so the document is a good fit for a document's whole
+lifecycle, not for a stream of unrelated documents:
+
+- `remove` detaches in constant time and does not reclaim nodes.
+- A detached subtree stays valid and editable, and can be attached again.
+- `deinit` releases everything the document allocated.
 
 `replaceNull`, `replaceBool` and `remove` cannot fail. `replaceNumber` reports
 `error.OutOfRange` for an integer that does not fit the document's `i64`/`u64`
@@ -372,7 +389,8 @@ Details worth knowing:
 - An object member is one key/value pair, so `remove` on a member value takes
   its key with it.
 - `remove` on the root, or on a node that is already detached, does nothing.
-  A removed subtree stays valid and detached until `deinit`.
+- Adding a key that already exists appends a second member; lookups return the
+  first match, like a parser resolving duplicate member names.
 - `insertAt(len)` appends, and any larger index reports `error.OutOfBounds`.
 - The `replace*` methods and `replace` change only the value. Children a
   container used to have become unreachable; their storage is freed by

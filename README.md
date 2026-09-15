@@ -159,9 +159,11 @@ Editing methods split into three groups:
 
 - **In place** — `replaceNull`, `replaceBool`, `replaceNumber`, `replaceString`
   change a node's value but keep its position.
-- **Structure** — `addField`, `addString`, `append`, `appendString`, `insertAt`
-  attach a node; `remove` detaches one; `replace` splices a detached node into
-  the node's own slot.
+- **Structure** — `addField`, `append` and `insertAt` attach a node; `remove`
+  detaches one; `replace` splices a detached node into the node's own slot.
+  `addNull` / `addBool` / `addNumber` / `addString` and `appendNull` /
+  `appendBool` / `appendNumber` / `appendString` are shorthands that build the
+  value node for you.
 - **Copy** — `copyFrom` deep-copies a subtree, including one from another
   document.
 
@@ -170,6 +172,11 @@ New nodes come from `DocumentMut.newNull` / `newBool` / `newNumber` /
 that is already linked into a tree fails with `error.AlreadyAttached`, and a
 node from another document fails with `error.DifferentStorage`; use `copyFrom`
 to move data across documents.
+
+Storage is append-only: `remove` detaches a subtree in constant time but does
+not reclaim its nodes, so a detached subtree stays valid, keeps accepting
+edits, and can be attached somewhere else. `deinit` releases everything the
+document allocated, so call it when the document's lifecycle ends.
 
 Editing never overflows the stack, however deep the document is.
 

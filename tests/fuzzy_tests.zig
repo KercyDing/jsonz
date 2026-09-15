@@ -402,6 +402,17 @@ fn expectDomRoundTrip(allocator: std.mem.Allocator, input: []const u8, options: 
     const first = try document.toSlice(allocator, .{});
     defer allocator.free(first);
 
+    // The mutable tree is a copy of the same document, so it must serialize
+    // identically.
+    var mutable = try document.toMut(allocator);
+    defer mutable.deinit();
+    const from_mut = try mutable.toSlice(allocator, .{});
+    defer allocator.free(from_mut);
+    if (!std.mem.eql(u8, first, from_mut)) {
+        std.debug.print("mut serialization differs on {s}: {s} -> {s}\n", .{ input, first, from_mut });
+        return error.TestUnexpectedResult;
+    }
+
     var again = try jsonz.dom.parse(allocator, first, options);
     defer again.deinit();
     const second = try again.toSlice(allocator, .{});

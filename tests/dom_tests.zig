@@ -247,6 +247,332 @@ test "json pointer format" {
     try testing.expectEqual(@as(u8, 5), try nested.toNumber(.u8));
 }
 
+test "mutable conversion" {
+    var document = try dom.parse(
+        testing.allocator,
+        "{\"a\":[1,2,{\"b\":\"x\"}],\"c\":true,\"d\":null,\"e\":-3.5}",
+        .{},
+    );
+    defer document.deinit();
+
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+
+    const root = mutable.root();
+    try testing.expect(root.isObject());
+    try testing.expectEqual(@as(usize, 4), try root.len());
+
+    const a = try root.field("a");
+    try testing.expect(a.isArray());
+    try testing.expectEqual(@as(usize, 3), try a.len());
+    try testing.expectEqual(@as(u64, 1), try (try a.at(0)).toNumber(.u64));
+    try testing.expectEqual(@as(u64, 2), try (try a.at(1)).toNumber(.u64));
+    try testing.expectEqualStrings("x", try (try (try a.at(2)).field("b")).toString());
+
+    try testing.expect(try (try root.field("c")).toBool());
+    try testing.expect((try root.field("d")).isNull());
+    try testing.expectEqual(@as(f64, -3.5), try (try root.field("e")).toNumber(.f64));
+    try testing.expect(root.get("missing") == null);
+
+    var fields = try root.objectIterator();
+    var count: usize = 0;
+    while (fields.next()) |entry| : (count += 1) try testing.expect(entry.key.len == 1);
+    try testing.expectEqual(@as(usize, 4), count);
+}
+
+test "mutable conversion of deep documents" {
+    const depth = 20_000;
+    const input = try testing.allocator.alloc(u8, depth * 2);
+    defer testing.allocator.free(input);
+    @memset(input[0..depth], '[');
+    @memset(input[depth..], ']');
+
+    var document = try dom.parse(testing.allocator, input, .{});
+    defer document.deinit();
+
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+
+    // The innermost array is empty, one level below the root.
+    var node = mutable.root();
+    var remaining: usize = depth - 1;
+    while (remaining != 0) : (remaining -= 1) node = try node.at(0);
+    try testing.expect(node.isArray());
+    try testing.expectEqual(@as(usize, 0), try node.len());
+}
+
+test "mutable serialization matches compact output" {
+    for (valid_inputs) |input| {
+        try expectMutMatches(input, .{});
+    }
+    for (permissive_inputs) |entry| {
+        // Some entries combine options that still reject the input on purpose.
+        if (!try domAccepts(entry.input, entry.options)) continue;
+        try expectMutMatches(entry.input, entry.options);
+    }
+}
+
+/// `Document -> toMut -> toSlice` must be byte-identical to the compact output.
+fn expectMutMatches(input: []const u8, options: dom.ParseOptions) !void {
+    var document = try dom.parse(testing.allocator, input, options);
+    defer document.deinit();
+
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+
+    for ([_]bool{ false, true }) |pretty| {
+        const write_options: dom.WriteOptions = .{ .pretty = pretty };
+        const expected = try document.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(expected);
+        const actual = try mutable.toSlice(testing.allocator, write_options);
+        defer testing.allocator.free(actual);
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "mutable json pointer" {
+    var document = try dom.parse(
+        testing.allocator,
+        "{\"foo\":[\"bar\",\"baz\"],\"\":0,\"a/b\":1,\"m~n\":8,\"01\":\"leading\",\"nested\":{\"a\":{\"b\":5}}}",
+        .{},
+    );
+    defer document.deinit();
+
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    try testing.expect((try root.ptrGet("")).isObject());
+    try testing.expectEqualStrings("bar", try (try root.ptrGet("/foo/0")).toString());
+    try testing.expectEqual(@as(u8, 0), try (try root.ptrGet("/")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 1), try (try root.ptrGet("/a~1b")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 8), try (try root.ptrGet("/m~0n")).toNumber(.u8));
+    // A leading zero is not an array index, but it is a valid object member.
+    try testing.expectEqualStrings("leading", try (try root.ptrGet("/01")).toString());
+
+    try testing.expectError(error.InvalidArrayIndex, root.ptrGet("/foo/01"));
+    try testing.expectError(error.OutOfBounds, root.ptrGet("/foo/2"));
+    try testing.expectError(error.OutOfBounds, root.ptrGet("/foo/-"));
+    try testing.expectError(error.MissingField, root.ptrGet("/nope"));
+    try testing.expectError(error.UnexpectedType, root.ptrGet("/foo/0/deeper"));
+    try testing.expectError(error.InvalidPointer, root.ptrGetDyn("foo"));
+    try testing.expectError(error.InvalidPointer, root.ptrGetDyn("/~2"));
+
+    const nested = try root.ptrGetFmt("/nested/{s}/{s}", .{ "a", "b" });
+    try testing.expectEqual(@as(u8, 5), try nested.toNumber(.u8));
+    try testing.expectError(error.OutOfBounds, root.ptrGetFmt("/foo/{}", .{@as(usize, 9)}));
+}
+
+test "mutable json pointer keys are exact" {
+    var document = try dom.parse(
+        testing.allocator,
+        "{\"\\u00e9\":1,\"e\\u0301\":2,\"foo\":3,\"foo\":4}",
+        .{},
+    );
+    defer document.deinit();
+
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // Precomposed and decomposed forms are different members, not normalized.
+    try testing.expectEqual(@as(u8, 1), try (try root.ptrGet("/\u{e9}")).toNumber(.u8));
+    try testing.expectEqual(@as(u8, 2), try (try root.ptrGet("/e\u{301}")).toNumber(.u8));
+    // Duplicate member names resolve to the first match.
+    try testing.expectEqual(@as(u8, 3), try (try root.ptrGet("/foo")).toNumber(.u8));
+}
+
+test "mutable edits" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":[10,20]}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // In-place scalar replacement keeps the node's position.
+    const a = try root.field("a");
+    try a.replaceString("hi");
+    a.replaceNumber(@as(u8, 7));
+    a.replaceBool(true);
+    a.replaceNumber(@as(f64, -1.5));
+    a.replaceNull();
+
+    // Attach detached nodes and inline strings.
+    try root.addString("c", "x");
+    try root.addField("d", try mutable.newString("y"));
+    const b = try root.field("b");
+    try b.appendString("30");
+    try b.append(try mutable.newNumber(@as(i32, 40)));
+    try b.insertAt(0, try mutable.newObject());
+    try (try b.at(0)).addField("k", try mutable.newBool(true));
+    try b.insertAt(1, try mutable.newNull());
+
+    try expectSerialized(&mutable, "{\"a\":null,\"b\":[{\"k\":true},null,10,20,\"30\",40],\"c\":\"x\",\"d\":\"y\"}");
+    try expectSerializedPretty(&mutable);
+}
+
+test "mutable removals" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2,\"c\":[1,2,3,4]}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // An object member is removed together with its key.
+    (try root.field("a")).remove();
+    try testing.expect(root.get("a") == null);
+
+    const c = try root.field("c");
+    try testing.expectEqual(@as(usize, 4), try c.len());
+    (try c.at(1)).remove();
+    try testing.expectEqual(@as(usize, 3), try c.len());
+    try expectSerialized(&mutable, "{\"b\":2,\"c\":[1,3,4]}");
+
+    // Removing the last element keeps the tail link correct.
+    (try c.at(2)).remove();
+    try expectSerialized(&mutable, "{\"b\":2,\"c\":[1,3]}");
+    (try c.at(0)).remove();
+    (try c.at(0)).remove();
+    try expectSerialized(&mutable, "{\"b\":2,\"c\":[]}");
+
+    // The root itself cannot be removed.
+    root.remove();
+    try expectSerialized(&mutable, "{\"b\":2,\"c\":[]}");
+}
+
+test "mutable replacement" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":[1,2,3]}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // `replace` splices a detached node into this node's slot.
+    try (try root.field("a")).replace(try mutable.newString("z"));
+    try expectSerialized(&mutable, "{\"a\":\"z\",\"b\":[1,2,3]}");
+
+    const b = try root.field("b");
+    try (try b.at(1)).replace(try mutable.newArray());
+    try expectSerialized(&mutable, "{\"a\":\"z\",\"b\":[1,[],3]}");
+}
+
+test "mutable attach errors" {
+    var document = try dom.parse(testing.allocator, "{\"arr\":[[1],2]}", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // A node that is still linked into the tree cannot be attached again.
+    const arr = try root.field("arr");
+    try testing.expectError(error.AlreadyAttached, arr.append(try arr.at(0)));
+    try testing.expectError(error.AlreadyAttached, root.addField("x", root));
+
+    // A node of another document needs `copyFrom`.
+    var other = try dom.parse(testing.allocator, "{\"k\":[7]}", .{});
+    defer other.deinit();
+    var other_mut = try other.toMut(testing.allocator);
+    defer other_mut.deinit();
+    try testing.expectError(error.DifferentStorage, arr.append(other_mut.root()));
+
+    try testing.expectError(error.UnexpectedType, (try arr.at(0)).addField("k", try mutable.newNull()));
+    try testing.expectError(error.UnexpectedType, root.appendString("s"));
+    try testing.expectError(error.OutOfBounds, arr.insertAt(9, try mutable.newNull()));
+
+    // The failed operations must not have changed the document.
+    try expectSerialized(&mutable, "{\"arr\":[[1],2]}");
+}
+
+test "mutable copyFrom" {
+    var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":[true,{\"n\":\"x\\n\"}]}", .{});
+    defer document.deinit();
+    var source = try document.toMut(testing.allocator);
+    defer source.deinit();
+
+    var other = try dom.parse(testing.allocator, "[0,0,0]", .{});
+    defer other.deinit();
+    var target = try other.toMut(testing.allocator);
+    defer target.deinit();
+    const root = target.root();
+
+    // Deep copy across documents.
+    try root.copyFrom(source.root());
+    try expectSerialized(&target, "{\"a\":1,\"b\":[true,{\"n\":\"x\\n\"}]}");
+
+    // The copy is independent: editing it must not touch the source.
+    const copied = try (try (try root.field("b")).at(1)).field("n");
+    try copied.replaceString("changed");
+    try expectSerialized(&target, "{\"a\":1,\"b\":[true,{\"n\":\"changed\"}]}");
+    try expectSerialized(&source, "{\"a\":1,\"b\":[true,{\"n\":\"x\\n\"}]}");
+
+    // And copyFrom must work within one document too.
+    try (try root.field("a")).copyFrom(try (try root.field("b")).at(0));
+    try expectSerialized(&target, "{\"a\":true,\"b\":[true,{\"n\":\"changed\"}]}");
+}
+
+test "mutable large array" {
+    const count = 10_000;
+    var document = try dom.parse(testing.allocator, "[]", .{});
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    for (0..count) |i| {
+        try root.append(try mutable.newNumber(@as(u64, i)));
+    }
+    try testing.expectEqual(@as(usize, count), try root.len());
+
+    // Removing from the front is O(1) per node thanks to `prev`/`next`.
+    while (try root.len() != 0) {
+        (try root.at(0)).remove();
+    }
+    try expectSerialized(&mutable, "[]");
+}
+
+test "mutable deep copy" {
+    const depth = 20_000;
+    const input = try testing.allocator.alloc(u8, depth * 2);
+    defer testing.allocator.free(input);
+    @memset(input[0..depth], '[');
+    @memset(input[depth..], ']');
+
+    var document = try dom.parse(testing.allocator, input, .{});
+    defer document.deinit();
+    var source = try document.toMut(testing.allocator);
+    defer source.deinit();
+
+    var other = try dom.parse(testing.allocator, "null", .{});
+    defer other.deinit();
+    var target = try other.toMut(testing.allocator);
+    defer target.deinit();
+
+    try target.root().copyFrom(source.root());
+    const output = try target.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(output);
+    try testing.expectEqualStrings(input, output);
+}
+
+fn expectSerialized(document: *dom.DocumentMut, expected: []const u8) !void {
+    const output = try document.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(output);
+    try testing.expectEqualStrings(expected, output);
+}
+
+/// Pretty output must stay valid JSON that reads back as the minified form.
+fn expectSerializedPretty(document: *dom.DocumentMut) !void {
+    const minified = try document.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(minified);
+    const pretty = try document.toSlice(testing.allocator, .{ .pretty = true });
+    defer testing.allocator.free(pretty);
+
+    var reparsed = try dom.parse(testing.allocator, pretty, .{});
+    defer reparsed.deinit();
+    const again = try reparsed.toSlice(testing.allocator, .{});
+    defer testing.allocator.free(again);
+    try testing.expectEqualStrings(minified, again);
+}
+
 /// Inputs `dom.parse` rejects, with or without the permissive options.
 const malformed_inputs = [_][]const u8{
     "",

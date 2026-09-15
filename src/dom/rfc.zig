@@ -126,7 +126,9 @@ fn tokenEql(stored: []const u8, token: []const u8) bool {
     return stored_index == stored.len;
 }
 
-fn validToken(token: []const u8) bool {
+/// Whether `token` is a well-formed RFC 6901 reference token: a `~` may only
+/// start a `~0` or `~1` escape.
+pub fn validToken(token: []const u8) bool {
     var index: usize = 0;
     while (index < token.len) : (index += 1) {
         if (token[index] != '~') continue;
@@ -138,7 +140,28 @@ fn validToken(token: []const u8) bool {
 }
 
 /// Parses an RFC 6901 array index: `0`, or `[1-9][0-9]*` without overflow.
-fn parseArrayIndex(token: []const u8) ?usize {
+/// Decodes `~1` to `/` and `~0` to `~` into `buffer`, which must hold at least
+/// `token.len` bytes, and returns the decoded token.
+///
+/// The token must be well-formed; `validToken` checks that.
+pub fn decodeToken(buffer: []u8, token: []const u8) []const u8 {
+    std.debug.assert(buffer.len >= token.len);
+    var length: usize = 0;
+    var index: usize = 0;
+    while (index < token.len) : (index += 1) {
+        if (token[index] == '~' and index + 1 < token.len) {
+            buffer[length] = if (token[index + 1] == '1') '/' else '~';
+            index += 1;
+        } else {
+            buffer[length] = token[index];
+        }
+        length += 1;
+    }
+    return buffer[0..length];
+}
+
+/// Parses an RFC 6901 array index: `0`, or `[1-9][0-9]*` without overflow.
+pub fn parseArrayIndex(token: []const u8) ?usize {
     if (token.len == 0) return null;
     if (token[0] == '0') return if (token.len == 1) 0 else null;
     if (token[0] < '1' or token[0] > '9') return null;
@@ -201,6 +224,16 @@ test "token decoding" {
     try testing.expect(!tokenEql("a/b", "a~0b"));
     try testing.expect(!tokenEql("ab", "a~1b"));
     try testing.expect(!tokenEql("a/or", "a~2b"));
+}
+
+test "token decoding into a buffer" {
+    var buffer: [16]u8 = undefined;
+    try testing.expectEqualStrings("a/b", decodeToken(&buffer, "a~1b"));
+    try testing.expectEqualStrings("m~n", decodeToken(&buffer, "m~0n"));
+    try testing.expectEqualStrings("~1", decodeToken(&buffer, "~01"));
+    try testing.expectEqualStrings("plain", decodeToken(&buffer, "plain"));
+    try testing.expectEqualStrings("", decodeToken(&buffer, ""));
+    try testing.expectEqualStrings("/", decodeToken(&buffer, "~1"));
 }
 
 test "array index grammar" {

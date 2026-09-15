@@ -32,6 +32,14 @@ pub const ParseError = document.ParseError;
 /// Options that control DOM serialization.
 pub const WriteOptions = document.WriteOptions;
 
+/// Whether `token` is a well-formed RFC 6901 reference token.
+pub const validToken = rfc.validToken;
+/// Decodes one RFC 6901 reference token into `buffer`, which must hold at least
+/// `token.len` bytes.
+pub const decodeToken = rfc.decodeToken;
+/// Parses an RFC 6901 array index token, or null when it is not one.
+pub const parseArrayIndex = rfc.parseArrayIndex;
+
 /// Parses JSON into an owned DOM document.
 pub const parse = document.parse;
 /// Parses JSON into caller-provided storage.

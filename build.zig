@@ -7,7 +7,8 @@ pub fn build(b: *std.Build) void {
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
 
     // float
-    const float_mod = b.addModule("float", .{
+    // Internal implementation dependency; do not expose as a package module.
+    const float_mod = b.createModule(.{
         .root_source_file = b.path("src/float/root.zig"),
         .target = target,
         .optimize = optimize,

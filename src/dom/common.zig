@@ -72,7 +72,7 @@ pub const NumberType = enum {
     }
 };
 
-/// The parsed storage behind every `Node`.
+/// The storage behind the read-only DOM and as a conversion source.
 ///
 /// `input` is the (owned or caller-provided) JSON buffer whose escape
 /// sequences were decoded in place; `nodes` is the node pool. Both slices are

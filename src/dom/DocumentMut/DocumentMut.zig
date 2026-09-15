@@ -16,8 +16,28 @@ pub const patch = @import("patch.zig");
 /// Node and string storage owned by this document.
 storage: NodeMut.StorageMut,
 
-/// Creates a document whose root is `null`, ready to be filled by editing.
-pub fn init(allocator: std.mem.Allocator) !DocumentMut {
+/// What a new document's root is, chosen with `init`.
+///
+/// Only the two containers: a value on its own has no building semantics, and
+/// a document that should hold something else starts from one of these and
+/// calls `replaceNull` / `replaceNumber` / ... on the root.
+pub const RootKind = enum { object, array };
+
+/// Creates an empty document whose root is an object or an array.
+pub fn init(allocator: std.mem.Allocator, kind: RootKind) !DocumentMut {
+    var document = try initEmpty(allocator);
+    errdefer document.deinit();
+    const container = switch (kind) {
+        .object => try document.newObject(),
+        .array => try document.newArray(),
+    };
+    try document.root().replace(container);
+    return document;
+}
+
+/// Creates a document whose root is `null`, for callers that replace the whole
+/// root anyway, like `clone`.
+fn initEmpty(allocator: std.mem.Allocator) !DocumentMut {
     var storage: NodeMut.StorageMut = .{ .allocator = allocator };
     errdefer storage.nodes.deinit(allocator);
     storage.root = try NodeMut.createNull(&storage);
@@ -57,7 +77,7 @@ pub fn fromStorage(
 
 /// Deep-copies `source` into a new document; the copy shares nothing with it.
 pub fn clone(allocator: std.mem.Allocator, source: *DocumentMut) !DocumentMut {
-    var copy = try init(allocator);
+    var copy = try initEmpty(allocator);
     errdefer copy.deinit();
     try copy.root().copyFrom(source.root());
     return copy;

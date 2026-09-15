@@ -692,7 +692,7 @@ test "mutable detached nodes" {
 }
 
 test "mutable attach cycles" {
-    var document = try dom.DocumentMut.init(testing.allocator);
+    var document = try dom.DocumentMut.init(testing.allocator, .object);
     defer document.deinit();
 
     // Build a detached tree: outer holds an array and an object.
@@ -818,23 +818,39 @@ test "mutable deep copy" {
 }
 
 test "mutable document lifecycle" {
-    var document = try dom.DocumentMut.init(testing.allocator);
+    // A new document is empty, and is filled through its own root.
+    var document = try dom.DocumentMut.init(testing.allocator, .object);
     defer document.deinit();
-    try expectSerialized(&document, "null");
+    try expectSerialized(&document, "{}");
 
-    // Build a fresh document and splice a new root in.
-    const root = try document.newObject();
-    try root.addString("k", "v");
-    try document.root().replace(root);
+    try document.root().addString("k", "v");
     try expectSerialized(&document, "{\"k\":\"v\"}");
 
     // A clone is an independent deep copy.
     var copy = try dom.DocumentMut.clone(testing.allocator, &document);
     defer copy.deinit();
-    try expectSerialized(&copy, "{\"k\":\"v\"}");
     try (try copy.root().field("k")).replaceString("other");
     try expectSerialized(&copy, "{\"k\":\"other\"}");
     try expectSerialized(&document, "{\"k\":\"v\"}");
+
+    // The root is an ordinary node, so it is swapped like any other.
+    const list = try document.newArray();
+    try list.appendNumber(@as(u8, 1));
+    try document.root().replace(list);
+    try expectSerialized(&document, "[1]");
+}
+
+test "mutable init kinds" {
+    var document = try dom.DocumentMut.init(testing.allocator, .array);
+    defer document.deinit();
+    try expectSerialized(&document, "[]");
+
+    try document.root().appendString("zig");
+    try expectSerialized(&document, "[\"zig\"]");
+
+    // A root holds anything: replace it when the document is not a container.
+    try document.root().replaceNumber(@as(u8, 8));
+    try expectSerialized(&document, "8");
 }
 
 fn expectDocumentJson(document: *dom.Document, expected: []const u8) !void {

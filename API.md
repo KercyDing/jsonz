@@ -156,6 +156,7 @@ representations. See `src/typed/deserialize.zig`.
 | `dom.toSlice(allocator, view, options)` | `![]u8` | Serialize a `Node`. |
 | `dom.toWriter(writer, view, options)` | `!void` | Serialize a `Node`. |
 | `Document.toMut(allocator)` | `Allocator.Error!DocumentMut` | Copy into an editable document. |
+| `dom.parseMut(allocator, input, options)` | `ParseError!DocumentMut` | Parse straight into an editable document. |
 
 For workloads that parse many documents in one process,
 `std.heap.c_allocator` is recommended because it reuses freed heap blocks
@@ -306,6 +307,10 @@ not re-parse or re-serialize anything.
 
 | API | Purpose |
 | --- | --- |
+| `init(allocator)` | A document whose root is `null`, ready to be filled. |
+| `parse(allocator, input, options)` | Parse JSON straight into a mutable document. |
+| `fromStorage(allocator, storage, root_index)` | Copy a compact document's storage. |
+| `clone(allocator, source)` | Deep-copy another document. |
 | `deinit()` | Release the node and string storage. |
 | `root()` | The root `NodeMut`. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
@@ -345,13 +350,27 @@ node from a different `DocumentMut` reports `error.DifferentStorage`.
 `replace*` and `remove` cannot fail beyond allocation in `replaceString`.
 `copyFrom` only returns allocation errors. The methods that attach a node
 return `MutateError`: `error.AlreadyAttached` when the node is still linked
-into a tree (including attaching an object to itself), `error.DifferentStorage`
-when it belongs to another document, `error.UnexpectedType` when the container
+into a tree (including attaching a node to itself), `error.DifferentStorage`
+when it belongs to another document, `error.WouldCycle` when the attach would
+make the node its own descendant, `error.UnexpectedType` when the container
 kind is wrong, and `error.OutOfBounds` when an `insertAt` index is past the
 end. A failed attach leaves the document unchanged.
 
-`copyFrom` is iterative, so copying a very deep subtree cannot overflow the
-stack.
+The cycle check walks from the target up to the root, so an attach costs the
+document's depth. The other checks are constant time.
+
+Details worth knowing:
+
+- An object member is one key/value pair, so `remove` on a member value takes
+  its key with it.
+- `remove` on the root, or on a node that is already detached, does nothing.
+  A removed subtree stays valid and detached until `deinit`.
+- `insertAt(len)` appends, and any larger index reports `error.OutOfBounds`.
+- The `replace*` methods and `replace` change only the value. Children a
+  container used to have become unreachable; their storage is freed by
+  `deinit`, not by the edit.
+- `copyFrom` is iterative, so copying a very deep subtree cannot overflow the
+  stack, and the source may belong to another document.
 
 ### JSON Pointer
 
@@ -455,6 +474,7 @@ so that stream decides; `toSlice` returns plain text.
 | --- | --- |
 | `AlreadyAttached` | The node is already linked into a tree. |
 | `DifferentStorage` | The node belongs to another document. |
+| `WouldCycle` | The attach would make the node its own descendant. |
 
 `typed.ParseError`:
 

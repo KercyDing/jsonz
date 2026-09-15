@@ -573,6 +573,62 @@ test "mutable attach errors" {
     try expectSerialized(&mutable, "{\"arr\":[[1],2]}");
 }
 
+test "mutable attach cycles" {
+    var document = try dom.DocumentMut.init(testing.allocator);
+    defer document.deinit();
+
+    // Build a detached tree: outer holds an array and an object.
+    const outer = try document.newObject();
+    const list = try document.newArray();
+    const branch = try document.newObject();
+    try outer.addField("list", list);
+    try outer.addField("branch", branch);
+
+    // Attaching the ancestor inside its own descendants would cycle.
+    try testing.expectError(error.WouldCycle, list.append(outer));
+    try testing.expectError(error.WouldCycle, list.insertAt(0, outer));
+    try testing.expectError(error.WouldCycle, branch.addField("self", outer));
+    try testing.expectError(error.WouldCycle, branch.replace(outer));
+
+    // Attaching it anywhere else is fine.
+    try document.root().replace(outer);
+    try expectSerialized(&document, "{\"list\":[],\"branch\":{}}");
+}
+
+test "mutable edge cases" {
+    var document = try dom.parse(
+        testing.allocator,
+        "{\"a\":[1,2],\"b\":1}",
+        .{},
+    );
+    defer document.deinit();
+    var mutable = try document.toMut(testing.allocator);
+    defer mutable.deinit();
+    const root = mutable.root();
+
+    // `insertAt` at the length appends; one past it is out of bounds.
+    const a = try root.field("a");
+    try a.insertAt(2, try mutable.newNumber(@as(u8, 3)));
+    try testing.expectError(error.OutOfBounds, a.insertAt(4, try mutable.newNumber(@as(u8, 9))));
+
+    // Replacing a container drops its former children.
+    try (try root.field("a")).replaceString("x");
+    try expectSerialized(&mutable, "{\"a\":\"x\",\"b\":1}");
+
+    // Removing a detached node does nothing.
+    const detached = try mutable.newArray();
+    detached.remove();
+    try testing.expect(detached.isArray());
+
+    // Removing the root does nothing either.
+    root.remove();
+    try testing.expect(root.isObject());
+
+    // A scalar container access reports the kind, not a missing member.
+    try testing.expectError(error.UnexpectedType, (try root.field("b")).field("x"));
+    try testing.expectError(error.UnexpectedType, (try root.field("b")).at(0));
+}
+
 test "mutable copyFrom" {
     var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":[true,{\"n\":\"x\\n\"}]}", .{});
     defer document.deinit();

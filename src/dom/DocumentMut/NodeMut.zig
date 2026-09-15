@@ -29,6 +29,8 @@ pub const MutateError = std.mem.Allocator.Error || common.AccessError || error{
     AlreadyAttached,
     /// The node belongs to another document's storage.
     DifferentStorage,
+    /// Attaching the node there would make it its own descendant.
+    WouldCycle,
 };
 
 /// Sentinel for "no node" links.
@@ -873,6 +875,14 @@ inline fn numberScalar(value: anytype) Scalar {
 fn checkAttachable(parent: NodeMut, value: NodeMut) MutateError!void {
     if (value.storage != parent.storage) return error.DifferentStorage;
     if (value.index == parent.index or isAttached(value)) return error.AlreadyAttached;
+    // A detached node can still hold `parent` in its own subtree, and attaching
+    // it there would make the tree a cycle. The walk is short in practice: it
+    // stops at the root.
+    const nodes = parent.storage.nodes.items;
+    var cursor = parent.index;
+    while (cursor != none) : (cursor = nodes[cursor].parent) {
+        if (cursor == value.index) return error.WouldCycle;
+    }
 }
 
 /// A node is attached when it is linked into a tree or is the document root.

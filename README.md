@@ -2,11 +2,10 @@
 
 A high-performance JSON document library for Zig.
 
-- `jsonz.dom` provides a native DOM for arbitrary JSON: a compact read-only
-  `Document` and an editable `DocumentMut`, with
-  [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access on
-  both, and [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch for
-  editable documents.
+- `jsonz.dom` provides a native DOM — a compact read-only `Document` and an
+  editable `DocumentMut`, with
+  [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer and
+  [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch.
 - `jsonz.typed` provides native Zig serialization and deserialization for known
   schemas.
 - `jsonz.diagnostic` reports the first JSON syntax error with its location.

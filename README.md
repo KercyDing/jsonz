@@ -126,17 +126,34 @@ var mutable = try document.toMut(allocator);
 defer mutable.deinit();
 
 const root = mutable.root();
+
+// Add a member to the root object.
 try root.addString("name", "jsonz");
-try (try root.field("tags")).appendString("dom");
-(try root.field("age")).replaceNumber(@as(u8, 3));
-(try root.field("old")).remove();
+
+// Take a node, then edit that node.
+const tags = try root.field("tags");
+try tags.appendString("dom");
+
+const age = try root.field("age");
+age.replaceNumber(@as(u8, 3));
+
+const old = try root.field("old");
+old.remove();
 
 const edited = try mutable.toSlice(allocator, .{ .pretty = true });
 ```
 
-`NodeMut` mirrors `Node` for reading, including `ptrGet`, and adds the editing
-methods. `DocumentMut` owns its nodes, so it borrows nothing from the caller and
-the original `Document` stays valid and unchanged.
+`NodeMut` is a handle to one node of the document: taking one copies nothing,
+and every edit goes through the document it came from. Reading works exactly
+like `Node`, JSON Pointer included:
+
+```zig
+const name = try mutable.ptrGet("/user/name");
+try name.replaceString("jsonz");
+```
+
+`DocumentMut` owns its nodes, so it borrows nothing from the caller and the
+original `Document` stays valid and unchanged.
 
 Editing methods split into three groups:
 

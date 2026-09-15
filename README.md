@@ -5,11 +5,10 @@ A high-performance JSON document library for Zig.
 - `jsonz.dom` provides a native DOM for arbitrary JSON: a compact read-only
   `Document` and an editable `DocumentMut`, with
   [RFC 6901](https://www.rfc-editor.org/info/rfc6901/) JSON Pointer access on
-  both.
+  both, and [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch for
+  editable documents.
 - `jsonz.typed` provides native Zig serialization and deserialization for known
   schemas.
-- `jsonz.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/)
-  JSON Patch to an editable document.
 - `jsonz.diagnostic` reports the first JSON syntax error with its location.
 
 ## Install
@@ -167,8 +166,9 @@ defer mutable.deinit();
 
 ### JSON Patch
 
-`jsonz.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/)
-patches to a `DocumentMut`:
+`DocumentMut.applyPatch` applies an
+[RFC 6902](https://www.rfc-editor.org/info/rfc6902/) patch, which is just a
+scripted sequence of the edits above:
 
 ```zig
 const patch =
@@ -179,13 +179,14 @@ const patch =
     \\]
 ;
 
-try jsonz.patch.apply(allocator, &mutable, patch, .{});
+try mutable.applyPatch(patch, .{});
 ```
 
-`apply` is atomic: when an operation fails, the document is left untouched. All
-six operations are supported: `add`, `remove`, `replace`, `move`, `copy` and
-`test`. `applyOps` applies an already parsed patch in place instead, which
-skips the extra copy but keeps the operations that ran before a failure.
+All six operations are supported: `add`, `remove`, `replace`, `move`, `copy`
+and `test`. Applying is atomic: the operations run on a private copy, so a
+failed operation leaves the document untouched. `jsonz.dom.patch.applyOps`
+applies an already parsed patch in place instead, which skips that copy but
+keeps the operations that ran before a failure.
 
 ### Diagnosing invalid JSON
 

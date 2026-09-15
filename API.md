@@ -9,7 +9,6 @@ A quick reference for the Zig API. The Zig source remains the source of truth.
 - [Public types](#public-types)
 - [`jsonz.typed`](#jsonztyped)
 - [`jsonz.dom`](#jsonzdom)
-- [`jsonz.patch`](#jsonzpatch)
 - [`jsonz.diagnostic`](#jsonzdiagnostic)
 - [Error values](#error-values)
 
@@ -68,8 +67,7 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | Module | Purpose |
 | --- | --- |
 | `jsonz.typed` | Parse and serialize known Zig types. |
-| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy. |
-| `jsonz.patch` | Applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch to a `DocumentMut`. |
+| `jsonz.dom` | A DOM for arbitrary JSON documents. `Document` is compact and read-only; `DocumentMut` is an independent editable copy, and `jsonz.dom.patch` applies [RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch to it. |
 | `jsonz.diagnostic` | Report the first JSON syntax error. |
 
 ## Public types
@@ -98,8 +96,8 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | `dom.ParseOptions` | struct | DOM parse options. |
 | `dom.ParseError` | error set | DOM parse errors. |
 | `dom.WriteOptions` | struct | DOM serialization options. |
-| `patch.Error` | error set | Patch application errors. |
-| `patch.Options` | struct | Patch parse options. |
+| `dom.patch.Error` | error set | Patch application errors. |
+| `dom.patch.Options` | struct | Patch parse options. |
 | `diagnostic.Diagnostic` | struct | One syntax error and where it is. |
 | `diagnostic.Span` | struct | A byte range of the input. |
 | `diagnostic.Note` | struct | Extra context for a report. |
@@ -192,6 +190,7 @@ src/dom/
     root.zig        the mutable model's exports
     DocumentMut.zig the DocumentMut type: root, serialize, pointer, new*
     NodeMut.zig     the linked node, its storage, edits and traversal
+    patch.zig       RFC 6902 JSON Patch over the edits above
 ```
 
 Each model is reached through its own `root.zig`; neither reaches into the
@@ -313,6 +312,7 @@ not re-parse or re-serialize anything.
 | --- | --- |
 | `init(allocator)` | A document whose root is `null`, ready to be filled. |
 | `parse(allocator, input, options)` | Parse JSON straight into a mutable document. |
+| `applyPatch(text, options)` | Apply an RFC 6902 JSON Patch, atomically. |
 | `fromStorage(allocator, storage, root_index)` | Copy a compact document's storage. |
 | `clone(allocator, source)` | Deep-copy another document. |
 | `deinit()` | Release the node and string storage. |
@@ -399,15 +399,17 @@ normalization. Duplicate member names resolve to the first match.
 The RFC 6901 URI fragment representation (`#/user/id`) is not implemented;
 `ptrGetDyn` accepts the JSON string representation only.
 
-## `jsonz.patch`
+### JSON Patch
 
-[RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch, applied to a
-`DocumentMut`.
+[RFC 6902](https://www.rfc-editor.org/info/rfc6902/) JSON Patch. A patch is a
+scripted sequence of the `NodeMut` edits above, so it lives on the mutable
+document rather than in a module of its own.
 
 | API | Returns | Purpose |
 | --- | --- | --- |
-| `patch.apply(allocator, document, text, options)` | `Error!void` | Parse and apply a patch, atomically. |
-| `patch.applyOps(document, ops)` | `Error!void` | Apply an already parsed patch in place. |
+| `DocumentMut.applyPatch(text, options)` | `Error!void` | Parse and apply a patch, atomically. |
+| `dom.patch.apply(document, text, options)` | `Error!void` | The same, as a free function. |
+| `dom.patch.applyOps(document, ops)` | `Error!void` | Apply an already parsed patch in place. |
 
 A patch is a JSON array of operation objects. Each names its target with an
 RFC 6901 JSON Pointer and they are applied in order; the six operations are
@@ -417,15 +419,15 @@ RFC 6901 JSON Pointer and they are applied in order; the six operations are
 var mutable = try jsonz.dom.parseMut(allocator, input, .{});
 defer mutable.deinit();
 
-try jsonz.patch.apply(allocator, &mutable, patch_text, .{});
+try mutable.applyPatch(patch_text, .{});
 ```
 
-`apply` is atomic: the operations run on a private deep copy that is committed
-only when the whole patch succeeds, so a failure leaves the document exactly as
-it was. That copy is the price of the guarantee; `applyOps` edits the document
+`applyPatch` is atomic: the operations run on a private deep copy that is
+committed only when the whole patch succeeds, so a failure leaves the document
+exactly as it was. That copy is the price of the guarantee; `applyOps` edits the document
 in place and keeps the operations that ran before a failure.
 
-### Operation notes
+#### Operation notes
 
 - `add` sets an object member, inserts an array element (`-` appends), and
   replaces the whole document when the path is empty.
@@ -440,9 +442,9 @@ in place and keeps the operations that ran before a failure.
   exactly for integers, object members compare as an unordered set, and array
   elements compare in order. A mismatch reports `error.TestFailed`.
 
-### Patch options
+#### Patch options
 
-`patch.Options`:
+`dom.patch.Options`:
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -554,7 +556,7 @@ so that stream decides; `toSlice` returns plain text.
 | `InvalidJson` | The input is not valid JSON. |
 | `OutOfMemory` | Allocation failed. |
 
-`patch.Error` is `dom.ParseError`, `dom.PointerError` and `dom.MutateError`
+`dom.patch.Error` is `dom.ParseError`, `dom.PointerError` and `dom.MutateError`
 combined, plus:
 
 | Value | Cause |

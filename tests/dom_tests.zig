@@ -391,6 +391,24 @@ test "mutable parse rejects invalid JSON" {
     try expectSerialized(&document, "[1]");
 }
 
+test "borrowed DOM parse uses caller storage" {
+    const input = "{\"name\":\"jsonz\",\"value\":\"a\\u00e9\"}";
+    var buffer: [input.len + 4]u8 = undefined;
+    @memcpy(buffer[0..input.len], input);
+    @memset(buffer[input.len..], 0);
+
+    var document = try dom.parseBorrowed(testing.allocator, &buffer, input.len, .{});
+    defer document.deinit();
+    try testing.expectEqualStrings("jsonz", try (try document.field("name")).toString());
+    try testing.expectEqualStrings("a\u{e9}", try (try document.field("value")).toString());
+    try testing.expect(!std.mem.eql(u8, buffer[0..input.len], input));
+}
+
+test "borrowed DOM parse requires reader padding" {
+    var buffer = [_]u8{'1'};
+    try testing.expectError(error.OutOfMemory, dom.parseBorrowed(testing.allocator, &buffer, 1, .{}));
+}
+
 test "mutable freeze matches the mutable document" {
     for (valid_inputs) |input| try expectFreezeMatches(input, .{});
     for (permissive_inputs) |entry| {

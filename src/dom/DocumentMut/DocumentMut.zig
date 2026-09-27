@@ -99,6 +99,7 @@ pub fn toDocument(self: *DocumentMut, allocator: std.mem.Allocator) std.mem.Allo
     var document: Document = .{
         .pool = compact.pool,
         .storage = .{ .nodes = &.{}, .input = compact.input },
+        .owns_input = true,
         .root_index = compact.root_index,
     };
     document.storage.nodes = document.pool.items();

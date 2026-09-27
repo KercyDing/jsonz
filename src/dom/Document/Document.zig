@@ -17,16 +17,17 @@ const WriteOptions = common.WriteOptions;
 pub const ParseOptions = reader.Options;
 pub const ParseError = reader.Error;
 
-/// Caller-provided storage when `parseInto` was used; otherwise the input
-/// buffer and the node pool are owned by `pool.allocator`.
+/// buffer and the node pool are owned by `pool.allocator` unless
+/// `owns_input` is false.
 pool: pool_mod.Pool,
 storage: common.Storage,
+owns_input: bool,
 root_index: u32,
 
 /// Releases the DOM storage and invalidates this document and all of its views.
 pub fn deinit(self: *Document) void {
     if (self.pool.allocator) |allocator| {
-        allocator.free(@constCast(self.storage.input));
+        if (self.owns_input) allocator.free(@constCast(self.storage.input));
     }
     self.pool.deinit();
     self.* = undefined;
@@ -206,6 +207,34 @@ pub fn parse(
     return .{
         .pool = pool,
         .storage = .{ .nodes = pool.items(), .input = owned },
+        .owns_input = true,
+        .root_index = root_index,
+    };
+}
+
+/// Parses JSON from caller-owned mutable storage without copying the input.
+///
+/// `buffer[0..input_len]` contains the JSON text and must be followed by four
+/// zero bytes. The reader decodes escapes in place, so the buffer is modified
+/// and must remain alive while the document is used.
+pub fn parseBorrowed(
+    allocator: std.mem.Allocator,
+    buffer: []u8,
+    input_len: usize,
+    options: ParseOptions,
+) ParseError!Document {
+    if (input_len > buffer.len or buffer.len - input_len < 4) return error.OutOfMemory;
+    if (!std.mem.allEqual(u8, buffer[input_len .. input_len + 4], 0)) return error.InvalidJson;
+
+    var pool = pool_mod.Pool.init(allocator, input_len, looksPretty(buffer[0..input_len])) catch
+        return error.OutOfMemory;
+    errdefer pool.deinit();
+
+    const root_index = try reader.read(&pool, buffer, input_len, options);
+    return .{
+        .pool = pool,
+        .storage = .{ .nodes = pool.items(), .input = buffer[0..input_len] },
+        .owns_input = false,
         .root_index = root_index,
     };
 }
@@ -233,6 +262,7 @@ pub fn parseInto(
     return .{
         .pool = pool,
         .storage = .{ .nodes = pool.items(), .input = input_copy },
+        .owns_input = false,
         .root_index = root_index,
     };
 }

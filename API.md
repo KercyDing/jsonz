@@ -17,8 +17,7 @@ A quick reference for the Zig API. The Zig source remains the source of truth.
 
 The owning entry points return a value with `deinit`. Call it exactly once.
 
-- `typed.parse` returns `Parsed(T)`.
-- `dom.parse` and `dom.parseInto` return `Document`.
+- `dom.parse`, `dom.parseBorrowed` and `dom.parseInto` return `Document`.
 - `dom.Document.toMut` returns `DocumentMut`.
 
 `typed.parseBorrowed`, `typed.parseInto` and `dom.parseBufferSize` have no owner
@@ -49,8 +48,8 @@ storage.
 - `NodeMut` and the `[]const u8` returned by `toString` are only valid while
   the `DocumentMut` lives. A `DocumentMut` owns its nodes and strings, so it
   borrows nothing from the caller.
-- `parseBorrowed` borrows unescaped strings directly from the input, which must
-  outlive the value.
+- `parseBorrowed` borrows the caller's mutable buffer, which must outlive the
+  `Document`.
 - `parseInto` borrows caller-provided storage, which must outlive the value.
 
 DOM string escapes are decoded in place, so `dom.parse` copies the input into
@@ -147,6 +146,7 @@ writing JSON values.
 | --- | --- | --- |
 | `dom.parse(allocator, input, options)` | `ParseError!Document` | Parse arbitrary JSON. |
 | `dom.parseInto(storage, input, options)` | `ParseError!Document` | Parse using caller-provided storage. |
+| `dom.parseBorrowed(allocator, buffer, input_len, options)` | `ParseError!Document` | Parse from caller-owned buffer. |
 | `dom.parseBufferSize(input_len, options)` | `usize` | Storage size required by `parseInto`. |
 | `Document.toMut(allocator)` | `Allocator.Error!DocumentMut` | Copy into an editable document. |
 | `dom.parseMut(allocator, input, options)` | `ParseError!DocumentMut` | Parse straight into an editable document. |
@@ -159,6 +159,9 @@ writing JSON values.
 | --- | --- | --- |
 | `allow_comments` | `false` | Accept `//` and `/* ... */` comments. |
 | `allow_trailing_commas` | `false` | Accept a comma before `]` or `}`. |
+
+`parseBorrowed` needs four zero bytes after the JSON and mutates the caller's
+buffer. Keep the buffer alive until `Document.deinit()`.
 
 ### Write options
 

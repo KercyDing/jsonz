@@ -16,6 +16,8 @@ pub const parse = Document.parse;
 pub const parseInto = Document.parseInto;
 /// Returns the required storage size for `parseInto`.
 pub const parseBufferSize = Document.parseBufferSize;
+/// Parses JSON from caller-owned mutable storage without copying the input.
+pub const parseBorrowed = Document.parseBorrowed;
 
 test {
     _ = Document;

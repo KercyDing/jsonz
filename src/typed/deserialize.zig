@@ -364,7 +364,7 @@ fn deserializeEnum(comptime T: type, deserializer: *Deserializer) Error!T {
         else => return error.WrongType,
     };
     inline for (comptime kind.enumFields(T)) |field| {
-        if (std.mem.eql(u8, raw, field.name)) return @enumFromInt(field.value);
+        if (std.mem.eql(u8, raw, field.name)) return @field(T, field.name);
     }
     return error.UnexpectedToken;
 }

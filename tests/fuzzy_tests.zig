@@ -28,10 +28,10 @@ const FuzzTarget = struct {
 
 /// Seeds the fuzzer with documents that already sit near a branch: valid
 /// values, values only the permissive options accept, and broken ones.
-const deep_arrays = "[" ** 300 ++ "]" ** 300;
-const deep_broken = "[" ** 300 ++ "x";
-const long_string = "\"" ++ "a" ** 100 ++ "\\n" ++ "b" ** 100 ++ "\"";
-const escape_run = "\"" ++ "\\n\\u0041\\t\\\\" ++ "a" ** 40 ++ "\\\"" ++ "b" ** 40 ++ "\"";
+const deep_arrays: []const u8 = &(@as([300]u8, @splat('[')) ++ @as([300]u8, @splat(']')));
+const deep_broken: []const u8 = &(@as([300]u8, @splat('[')) ++ @as([1]u8, @splat('x')));
+const long_string: []const u8 = "\"" ++ @as([100]u8, @splat('a')) ++ "\\n" ++ @as([100]u8, @splat('b')) ++ "\"";
+const escape_run: []const u8 = "\"" ++ "\\n\\u0041\\t\\\\" ++ @as([40]u8, @splat('a')) ++ "\\\"" ++ @as([40]u8, @splat('b')) ++ "\"";
 
 const corpus = [_][]const u8{
     "{}",

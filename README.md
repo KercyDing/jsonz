@@ -216,7 +216,7 @@ thread-safe; synchronize access when sharing it between threads.
 
 Development commands use [only](https://github.com/KercyDing/only) and
 [mise](https://github.com/jdx/mise). `mise` provides the Zig version; this project
-targets Zig `0.16.0` by default.
+targets Zig `0.17.0` by default.
 
 ```sh
 only build             # debug build
@@ -226,12 +226,12 @@ only bench typed       # typed benchmarks
 only release           # optimized build with symbols stripped
 ```
 
-Use the `master` group to run a command with Zig `master` from `mise.master.toml`:
+Use the `zig16` group to run a command with Zig `0.16.0` from `mise.zig16.toml`:
 
 ```sh
-only master build
-only master test
-only master release
+only zig16 build
+only zig16 test
+only zig16 release
 ```
 
 ## License

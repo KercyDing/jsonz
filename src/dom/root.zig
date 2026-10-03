@@ -29,6 +29,8 @@ pub const MutateError = document_mut.MutateError;
 pub const ParseOptions = document.ParseOptions;
 /// Errors returned by DOM parsing.
 pub const ParseError = document.ParseError;
+/// Errors returned by `parseBorrowed` and `parseInto`.
+pub const BorrowError = document.BorrowError;
 /// Options that control DOM serialization.
 pub const WriteOptions = common.WriteOptions;
 

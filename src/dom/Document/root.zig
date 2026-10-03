@@ -9,6 +9,8 @@ pub const Node = @import("Node.zig");
 pub const ParseOptions = Document.ParseOptions;
 /// Errors returned by DOM parsing.
 pub const ParseError = Document.ParseError;
+/// Errors returned by `parseBorrowed` and `parseInto`.
+pub const BorrowError = Document.BorrowError;
 
 /// Parses JSON into an owned DOM document.
 pub const parse = Document.parse;

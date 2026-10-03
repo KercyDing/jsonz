@@ -405,8 +405,11 @@ test "borrowed DOM parse uses caller storage" {
 }
 
 test "borrowed DOM parse requires reader padding" {
-    var buffer = [_]u8{'1'};
-    try testing.expectError(error.OutOfMemory, dom.parseBorrowed(testing.allocator, &buffer, 1, .{}));
+    var too_small = [_]u8{'1'};
+    try testing.expectError(error.BufferTooSmall, dom.parseBorrowed(testing.allocator, &too_small, 1, .{}));
+
+    var unpadded = [_]u8{ '1', 'x', 'x', 'x', 'x' };
+    try testing.expectError(error.InvalidJson, dom.parseBorrowed(testing.allocator, &unpadded, 1, .{}));
 }
 
 test "mutable freeze matches the mutable document" {

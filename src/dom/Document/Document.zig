@@ -16,6 +16,9 @@ const WriteOptions = common.WriteOptions;
 /// Options that control DOM parsing.
 pub const ParseOptions = reader.Options;
 pub const ParseError = reader.Error;
+/// `parseBorrowed` and `parseInto` also report caller-provided storage that is
+/// too small.
+pub const BorrowError = ParseError || error{BufferTooSmall};
 
 /// buffer and the node pool are owned by `pool.allocator` unless
 /// `owns_input` is false.
@@ -215,15 +218,16 @@ pub fn parse(
 /// Parses JSON from caller-owned mutable storage without copying the input.
 ///
 /// `buffer[0..input_len]` contains the JSON text and must be followed by four
-/// zero bytes. The reader decodes escapes in place, so the buffer is modified
-/// and must remain alive while the document is used.
+/// zero bytes; `buffer.len` smaller than `input_len + 4` reports
+/// `error.BufferTooSmall`. The reader decodes escapes in place, so the buffer
+/// is modified and must remain alive while the document is used.
 pub fn parseBorrowed(
     allocator: std.mem.Allocator,
     buffer: []u8,
     input_len: usize,
     options: ParseOptions,
-) ParseError!Document {
-    if (input_len > buffer.len or buffer.len - input_len < 4) return error.OutOfMemory;
+) BorrowError!Document {
+    if (input_len > buffer.len or buffer.len - input_len < 4) return error.BufferTooSmall;
     if (!std.mem.allEqual(u8, buffer[input_len .. input_len + 4], 0)) return error.InvalidJson;
 
     var pool = pool_mod.Pool.init(allocator, input_len, looksPretty(buffer[0..input_len])) catch
@@ -242,14 +246,15 @@ pub fn parseBorrowed(
 /// Parses JSON into caller-provided storage.
 ///
 /// `storage` must be at least `parseBufferSize(input.len, options)` bytes and
-/// must outlive the returned document. `Document.deinit` still invalidates the
-/// document, but does not free caller-owned storage.
+/// must outlive the returned document; a smaller slice reports
+/// `error.BufferTooSmall`. `Document.deinit` still invalidates the document,
+/// but does not free caller-owned storage.
 pub fn parseInto(
     storage: []u8,
     input: []const u8,
     options: ParseOptions,
-) ParseError!Document {
-    if (storage.len < input.len + 4) return error.OutOfMemory;
+) BorrowError!Document {
+    if (storage.len < input.len + 4) return error.BufferTooSmall;
 
     // The input copy (plus four zero padding bytes) comes first, then the node
     // pool, so a decode in place never disturbs the values.
@@ -313,7 +318,7 @@ test "caller storage" {
 
     var insufficient: [1]u8 = undefined;
     try std.testing.expectError(
-        error.OutOfMemory,
+        error.BufferTooSmall,
         parseInto(&insufficient, input, .{}),
     );
 }

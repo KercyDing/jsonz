@@ -49,8 +49,12 @@ storage.
   the `DocumentMut` lives. A `DocumentMut` owns its nodes and strings, so it
   borrows nothing from the caller.
 - `parseBorrowed` borrows the caller's mutable buffer, which must outlive the
-  `Document`.
+  `Document`. The buffer needs four zero bytes after the JSON
+  (`buffer.len >= input_len + 4`), or the call reports
+  `error.BufferTooSmall`; the reader decodes escapes in place.
 - `parseInto` borrows caller-provided storage, which must outlive the value.
+  Size it with `parseBufferSize`; a smaller slice reports
+  `error.BufferTooSmall`.
 
 DOM string escapes are decoded in place, so `dom.parse` copies the input into
 the document; the caller's buffer can be freed right after parsing.
@@ -85,6 +89,7 @@ Zig error sets are explicit. `AccessError` and `PointerError` cover node access;
 | `dom.MutateError` | error set | Structural edit errors. |
 | `dom.ParseOptions` | struct | DOM parse options. |
 | `dom.ParseError` | error set | DOM parse errors. |
+| `dom.BorrowError` | error set | `parseBorrowed` and `parseInto` errors. |
 | `dom.WriteOptions` | struct | DOM serialization options. |
 | `dom.DocumentMut.patch.Error` | error set | Patch application errors. |
 | `dom.DocumentMut.patch.Options` | struct | Patch parse options. |
@@ -159,9 +164,6 @@ writing JSON values.
 | --- | --- | --- |
 | `allow_comments` | `false` | Accept `//` and `/* ... */` comments. |
 | `allow_trailing_commas` | `false` | Accept a comma before `]` or `}`. |
-
-`parseBorrowed` needs four zero bytes after the JSON and mutates the caller's
-buffer. Keep the buffer alive until `Document.deinit()`.
 
 ### Write options
 
@@ -538,6 +540,12 @@ so that stream decides; `toSlice` returns plain text.
 | --- | --- |
 | `InvalidJson` | The input is not valid JSON. |
 | `OutOfMemory` | Allocation failed. |
+
+`dom.BorrowError` is `dom.ParseError` plus:
+
+| Value | Cause |
+| --- | --- |
+| `BufferTooSmall` | `parseBorrowed` or `parseInto` got less than the input plus the four zero padding bytes. |
 
 `DocumentMut.patch.Error` is `dom.ParseError`, `dom.PointerError` and
 `dom.MutateError`

@@ -12,10 +12,10 @@ A high-performance JSON document library for Zig.
 
 ## Install
 
-Add the stable `0.8.1` release:
+Add the stable `0.9.0` release:
 
 ```sh
-zig fetch --save git+https://github.com/KercyDing/jsonz#v0.8.1
+zig fetch --save git+https://github.com/KercyDing/jsonz#v0.9.0
 ```
 
 Or track `main`:

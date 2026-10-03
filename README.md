@@ -37,6 +37,14 @@ exe.root_module.addImport("jsonz", jsonz.module("jsonz"));
 
 See [API.md](API.md) for the full public API, ownership rules, and error values.
 
+## Benchmarks
+
+<p>
+  <img src="https://github.com/KercyDing/json-bench/releases/download/20260930-ace9943/ranking.png" />
+</p>
+
+Visit [json-bench](https://github.com/KercyDing/json-bench) for more details.
+
 ## Quick Start
 
 ### Typed JSON

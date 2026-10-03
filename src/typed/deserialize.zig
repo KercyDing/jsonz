@@ -2,6 +2,7 @@ const std = @import("std");
 const kind = @import("kind.zig");
 const cursor_mod = @import("cursor.zig");
 const pool_mod = @import("pool.zig");
+const scratch_mod = @import("scratch.zig");
 const serialize_mod = @import("serialize.zig");
 
 const Allocator = std.mem.Allocator;
@@ -151,10 +152,15 @@ fn parseAllocating(comptime T: type, allocator: Allocator, input: []const u8, op
 ///
 /// The returned value borrows `input`; escaped strings and container metadata
 /// may use `allocator`. Keep both alive for as long as the returned value is used.
+/// A failure releases every allocation it made.
 pub fn parseBorrowed(comptime T: type, allocator: Allocator, input: []const u8, options: Options) Error!T {
-    var deserializer = Deserializer.initBorrowed(allocator, input, options);
+    var scratch: scratch_mod.Scratch = .{ .backing = allocator };
+    errdefer scratch.releaseAll();
+
+    var deserializer = Deserializer.initBorrowed(scratch.allocator(), input, options);
     const value = try deserializer.deserialize(T);
     deserializer.cursor.finish() catch return error.TrailingData;
+    scratch.deinit();
     return value;
 }
 
@@ -601,6 +607,34 @@ test "caller buffer" {
 test "caller buffer capacity" {
     var buffer: [1]u8 = undefined;
     try testing.expectError(error.OutOfMemory, parseInto([]const u8, &buffer, "\"jsonz\"", .{}));
+}
+
+test "borrowed failure frees strings" {
+    const Entry = struct {
+        name: []const u8,
+        id: u32,
+    };
+
+    // `name` is decoded into a new allocation before `id` turns up missing.
+    try testing.expectError(
+        error.MissingField,
+        parseBorrowed(Entry, testing.allocator, "{\"name\":\"a\\nb\"}", .{}),
+    );
+}
+
+test "borrowed failure frees slices" {
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(testing.allocator);
+    try input.append(testing.allocator, '[');
+    for (0..40) |index| {
+        if (index != 0) try input.append(testing.allocator, ',');
+        try input.appendSlice(testing.allocator, "\"a\\nb\"");
+    }
+    // No closing bracket: the slice grows past its initial capacity, then fails.
+    try testing.expectError(
+        error.UnexpectedEof,
+        parseBorrowed([]const []const u8, testing.allocator, input.items, .{}),
+    );
 }
 
 test "parsed value fallback" {

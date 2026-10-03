@@ -35,11 +35,12 @@ pub fn resolve(root: anytype, pointer: []const u8) PointerError!@TypeOf(root) {
 /// node kind it meets at runtime.
 pub fn resolveStatic(root: anytype, comptime pointer: []const u8) PointerError!@TypeOf(root) {
     comptime validateComptime(pointer);
-    var current = root;
+    const storage = root.storage;
+    var index = root.index;
     inline for (comptime segments(pointer)) |segment| {
-        current = try descendSegment(current, segment);
+        index = try descendSegment(@TypeOf(root){ .storage = storage, .index = index }, segment);
     }
-    return current;
+    return .{ .storage = storage, .index = index };
 }
 
 /// Resolves a comptime-known pointer format. The format is expanded with
@@ -72,15 +73,18 @@ fn descendToken(current: anytype, token: []const u8) PointerError!@TypeOf(curren
     return current.getAt(index) orelse error.OutOfBounds;
 }
 
-inline fn descendSegment(current: anytype, segment: Segment) PointerError!@TypeOf(current) {
+/// Advances one prepared segment and returns the pool index it selects.
+inline fn descendSegment(current: anytype, segment: Segment) PointerError!u32 {
     if (current.isObject()) {
-        if (!segment.escaped) return current.get(segment.token) orelse error.MissingField;
-        return objectLookupEscaped(current, segment.token);
+        if (!segment.escaped) {
+            return (current.get(segment.token) orelse return error.MissingField).index;
+        }
+        return (try objectLookupEscaped(current, segment.token)).index;
     }
     if (!current.isArray()) return error.UnexpectedType;
     if (segment.dash) return error.OutOfBounds;
     const index = segment.index orelse return error.InvalidArrayIndex;
-    return current.getAt(index) orelse error.OutOfBounds;
+    return (current.getAt(index) orelse return error.OutOfBounds).index;
 }
 
 /// Looks up the first object member whose name matches the token. Duplicate

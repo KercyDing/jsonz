@@ -41,3 +41,6 @@ jobs:
 
       - name: Run tests
         run: zig build test
+
+      - name: Build and run fuzz targets
+        run: zig build fuzzy --fuzz=100000

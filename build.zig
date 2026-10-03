@@ -55,13 +55,28 @@ pub fn build(b: *std.Build) void {
     // The fuzz targets get a step of their own: `zig build fuzzy --fuzz[=limit]`.
     // The plain test suite stays finite.
     const fuzzy_step = b.step("fuzzy", "Run fuzz tests");
+    const fuzzy_float_mod = b.createModule(.{
+        .root_source_file = b.path("src/float/root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .strip = strip,
+    });
+    const fuzzy_jsonz_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "float", .module = fuzzy_float_mod },
+        },
+    });
     const fuzzy_tests_mod = b.createModule(.{
         .root_source_file = b.path("tests/fuzzy_tests.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .ReleaseFast,
         .strip = strip,
         .imports = &.{
-            .{ .name = "jsonz", .module = jsonz_mod },
+            .{ .name = "jsonz", .module = fuzzy_jsonz_mod },
         },
     });
     const fuzzy_tests = b.addTest(.{ .root_module = fuzzy_tests_mod });

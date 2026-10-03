@@ -138,8 +138,11 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
     const length = smith.slice(&buffer);
     const input = buffer[0..length];
 
+    var probe = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer probe.deinit();
+
     inline for (types) |T| {
-        if (typedAccepts(T, input)) try expectDomAccepts(input, .{});
+        if (typedAccepts(T, probe.allocator(), input)) try expectDomAccepts(input, .{});
         try expectTypedEntriesAgree(T, input);
     }
 
@@ -154,8 +157,8 @@ fn fuzzOne(_: void, smith: *std.testing.Smith) !void {
 /// The typed types every target agrees on.
 const types = .{ FuzzTarget, Address, Role, Action, []const i32, []const u8, u64, i64, f64 };
 
-fn typedAccepts(comptime T: type, input: []const u8) bool {
-    _ = jsonz.typed.parseBorrowed(T, std.testing.allocator, input, .{ .ignore_unknown_fields = true }) catch return false;
+fn typedAccepts(comptime T: type, allocator: std.mem.Allocator, input: []const u8) bool {
+    _ = jsonz.typed.parseBorrowed(T, allocator, input, .{ .ignore_unknown_fields = true }) catch return false;
     return true;
 }
 

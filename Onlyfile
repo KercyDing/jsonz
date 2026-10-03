@@ -15,7 +15,7 @@ test():
 [help] Run fuzzy tests
 [desc] Pass the iteration limit per target, e.g. `only fuzzy 10000`.
 fuzzy(iterations = "100000"):
-    zig build fuzzy --fuzz={{iterations}} -Doptimize=ReleaseFast
+    zig build fuzzy --fuzz={{iterations}}
 
 [help] Run benchmarks
 [desc] Use `only bench typed` to enable typed mode.
@@ -28,7 +28,7 @@ bench(mode = "dom"):
 [pass] Release build complete.
 [fail] Release build failed.
 release(strip = "true"):
-    zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
+    zig build -Doptimize=fast -Dstrip={{strip}}
 
 [help] Zig 0.16.0 tasks
 group zig16 {

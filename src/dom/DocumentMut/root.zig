@@ -27,6 +27,7 @@ pub fn fromStorage(
 }
 
 test {
-    _ = @import("DocumentMut.zig");
-    _ = node_mut;
+    std.testing.refAllDecls(DocumentMut);
+    std.testing.refAllDecls(node_mut);
+    std.testing.refAllDecls(storage_mod);
 }

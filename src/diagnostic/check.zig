@@ -27,7 +27,7 @@ pub const CheckOptions = struct {
 
 /// The deepest nesting the checker tracks exactly. Past it, structural
 /// expectations are dropped rather than guessed at; lexical rules still apply.
-pub const max_tracked_depth = 256;
+const max_tracked_depth = 256;
 
 /// Returns the first format problem in `input`, or `null` when it is valid JSON.
 pub fn check(input: []const u8, options: CheckOptions) ?Diagnostic {

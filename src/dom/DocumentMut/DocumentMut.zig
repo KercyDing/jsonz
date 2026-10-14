@@ -22,7 +22,7 @@ storage: storage_mod.StorageMut,
 /// Only the two containers: a value on its own has no building semantics, and
 /// a document that should hold something else starts from one of these and
 /// calls `replaceNull` / `replaceNumber` / ... on the root.
-pub const RootKind = enum { object, array };
+const RootKind = enum { object, array };
 
 /// Creates an empty document whose root is an object or an array.
 pub fn init(allocator: std.mem.Allocator, kind: RootKind) !DocumentMut {

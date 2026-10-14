@@ -46,6 +46,8 @@ pub const Shortest = format.Shortest;
 pub const maxNumberLength = format.maxLength;
 
 test {
-    _ = parse;
-    _ = format;
+    const std = @import("std");
+
+    std.testing.refAllDecls(parse);
+    std.testing.refAllDecls(format);
 }

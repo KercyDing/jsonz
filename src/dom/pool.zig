@@ -93,7 +93,7 @@ pub fn byteOffset(from: u32, to: u32) u64 {
 }
 
 /// The pool index `offset` bytes away from `from`.
-pub fn indexAtOffset(from: u32, offset: u64) u32 {
+fn indexAtOffset(from: u32, offset: u64) u32 {
     std.debug.assert(offset % node_size == 0);
     return from + @as(u32, @intCast(offset / node_size));
 }

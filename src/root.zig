@@ -6,7 +6,9 @@ pub const dom = @import("dom/root.zig");
 pub const diagnostic = @import("diagnostic/root.zig");
 
 test {
-    _ = typed;
-    _ = dom;
-    _ = diagnostic;
+    const std = @import("std");
+
+    std.testing.refAllDecls(typed);
+    std.testing.refAllDecls(dom);
+    std.testing.refAllDecls(diagnostic);
 }

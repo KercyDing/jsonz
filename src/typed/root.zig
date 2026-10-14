@@ -27,10 +27,12 @@ pub const toSlice = serialize.toSlice;
 pub const toWriter = serialize.toWriter;
 
 test {
-    _ = deserialize;
-    _ = serialize;
-    _ = cursor;
-    _ = float;
-    _ = kind;
-    _ = pool;
+    const std = @import("std");
+
+    std.testing.refAllDecls(deserialize);
+    std.testing.refAllDecls(serialize);
+    std.testing.refAllDecls(cursor);
+    std.testing.refAllDecls(float);
+    std.testing.refAllDecls(kind);
+    std.testing.refAllDecls(pool);
 }

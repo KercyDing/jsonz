@@ -3,10 +3,10 @@
 //!
 //! Nothing here is part of the public surface: `DocumentMut` and `NodeMut` are,
 //! and they reach into this file.
-pub const std = @import("std");
-pub const pool_mod = @import("../pool.zig");
-pub const common = @import("../common.zig");
-pub const reader = @import("../reader.zig");
+const std = @import("std");
+const pool_mod = @import("../pool.zig");
+const common = @import("../common.zig");
+const reader = @import("../reader.zig");
 
 /// This file: sibling declarations are reached through `Self` when a nested
 /// struct has a member of the same name.
@@ -67,13 +67,13 @@ pub fn stringAtMut(storage: *const StorageMut, node: *const NodeData) []const u8
     return storage.input.items[offset..][0..nodeLen(node.*)];
 }
 
-pub fn stringAtCompact(source: *const common.Storage, node: *const pool_mod.NodeData) []const u8 {
+fn stringAtCompact(source: *const common.Storage, node: *const pool_mod.NodeData) []const u8 {
     const offset: usize = @intCast(node.payload.offset);
     return source.input[offset..][0..node.tag.len];
 }
 
 /// One open container while `toCompact` walks the tree.
-pub const CompactFrame = struct {
+const CompactFrame = struct {
     /// The next source child to copy.
     source: u32,
     /// The slots this container still has to copy.
@@ -102,7 +102,7 @@ pub inline fn compactNode(node: NodeData) pool_mod.NodeData {
 }
 
 /// The mutable builder: links every parsed node into the tree as it is created.
-pub const Builder = struct {
+const Builder = struct {
     storage: *StorageMut,
     /// The reader's padded input, whose string bytes are copied out.
     input: []const u8,
@@ -219,7 +219,7 @@ pub fn insertBefore(storage: *StorageMut, before: u32, child: u32) void {
 }
 
 /// Reserved tag bit marking the value of an object member pair.
-pub const member_value_bit: u3 = 1;
+const member_value_bit: u3 = 1;
 
 pub inline fn isMemberValue(node: NodeData) bool {
     return node.tag.reserved & member_value_bit != 0;
@@ -241,7 +241,7 @@ pub inline fn setValue(node: *NodeData, tag: pool_mod.Tag, payload: pool_mod.Pay
     node.tag.reserved = reserved;
 }
 
-pub fn needsEscape(bytes: []const u8) bool {
+fn needsEscape(bytes: []const u8) bool {
     for (bytes) |byte| {
         if (byte < 0x20 or byte == '"' or byte == '\\') return true;
     }
@@ -252,7 +252,7 @@ pub inline fn stringTag(value: []const u8) pool_mod.Tag {
     return pool_mod.makeTag(.string, if (needsEscape(value)) .none else pool_mod.no_escape, value.len);
 }
 
-pub fn pointsInto(buffer: []const u8, slice: []const u8) bool {
+fn pointsInto(buffer: []const u8, slice: []const u8) bool {
     if (slice.len == 0) return false;
     const start = @intFromPtr(slice.ptr);
     const base = @intFromPtr(buffer.ptr);
@@ -290,7 +290,7 @@ pub fn storeStringNode(storage: *StorageMut, value: []const u8) !u32 {
     return appendNode(storage, .{ .tag = tag, .payload = .{ .offset = offset } });
 }
 
-pub const Scalar = struct { tag: pool_mod.Tag, payload: pool_mod.Payload };
+const Scalar = struct { tag: pool_mod.Tag, payload: pool_mod.Payload };
 
 /// Packs a Zig integer or float into a number node's tag and payload.
 pub inline fn numberScalar(value: anytype) common.AccessError!Scalar {
@@ -328,7 +328,7 @@ pub inline fn numberScalar(value: anytype) common.AccessError!Scalar {
     }
 }
 
-pub fn copyNode(storage: *StorageMut, source: NodeData, source_input: []const u8) !u32 {
+fn copyNode(storage: *StorageMut, source: NodeData, source_input: []const u8) !u32 {
     var node = source;
     switch (nodeType(source)) {
         .string => {
@@ -463,7 +463,7 @@ pub fn fromStorage(
 
 /// A compact copy of a mutable tree: a depth-first node pool plus the string
 /// pool its offsets refer to. Both are owned by the allocator that made them.
-pub const Compact = struct {
+const Compact = struct {
     /// The compact nodes, ready for a `Document`.
     pool: pool_mod.Pool,
     /// The decoded strings the nodes point into.

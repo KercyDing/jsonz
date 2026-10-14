@@ -11,7 +11,7 @@ pub const Options = struct {
 
 /// Low-level typed serializer used by custom `jsonzSerialize` hooks.
 /// Most applications should call `toSlice` or `toWriter`.
-pub const Serializer = struct {
+const Serializer = struct {
     writer: *std.Io.Writer,
     options: Options,
     depth: usize = 0,

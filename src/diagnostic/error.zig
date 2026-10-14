@@ -44,7 +44,7 @@ pub const EndContext = enum { value, key, colon, string, escape, unicode_escape,
 pub const CommentKind = enum { line, block };
 
 /// Why a byte sequence is not valid UTF-8.
-pub const Utf8Kind = enum {
+const Utf8Kind = enum {
     truncated,
     overlong,
     surrogate,
@@ -66,7 +66,7 @@ pub const Utf8Kind = enum {
 };
 
 /// What is wrong with a `\u` escape.
-pub const UnicodeEscape = union(enum) {
+const UnicodeEscape = union(enum) {
     truncated,
     invalid_hex_digit: u8,
     lone_leading_surrogate,
@@ -368,7 +368,7 @@ pub fn locate(input: []const u8, offset: usize) Location {
 }
 
 /// Writes `byte` the way Zig renders a character literal: `'a'`, `'\n'`, `'\x07'`.
-pub fn writeCharLiteral(writer: *std.Io.Writer, byte: u8) std.Io.Writer.Error!void {
+fn writeCharLiteral(writer: *std.Io.Writer, byte: u8) std.Io.Writer.Error!void {
     try writer.writeByte('\'');
     switch (byte) {
         '\n' => try writer.writeAll("\\n"),

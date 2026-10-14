@@ -65,7 +65,7 @@ pub fn Parsed(comptime T: type) type {
 
 /// Low-level typed deserializer used by custom `jsonzDeserialize` hooks.
 /// Most applications should call `parse`, `parseBorrowed`, or `parseInto`.
-pub const Deserializer = struct {
+const Deserializer = struct {
     cursor: Cursor,
     allocator: Allocator,
     options: Options,

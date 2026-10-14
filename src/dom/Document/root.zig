@@ -22,7 +22,9 @@ pub const parseBufferSize = Document.parseBufferSize;
 pub const parseBorrowed = Document.parseBorrowed;
 
 test {
-    _ = Document;
-    _ = Node;
-    _ = writer;
+    const std = @import("std");
+
+    std.testing.refAllDecls(Document);
+    std.testing.refAllDecls(Node);
+    std.testing.refAllDecls(writer);
 }

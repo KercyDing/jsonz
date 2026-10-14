@@ -113,9 +113,9 @@ pub fn toSlice(allocator: std.mem.Allocator, input: []const u8, options: ReportO
 }
 
 test {
-    _ = check_mod;
-    _ = error_mod;
-    _ = render_mod;
+    std.testing.refAllDecls(check_mod);
+    std.testing.refAllDecls(error_mod);
+    std.testing.refAllDecls(render_mod);
 }
 
 const testing = std.testing;

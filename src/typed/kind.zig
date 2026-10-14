@@ -5,7 +5,7 @@ const std = @import("std");
 const split_fields = !@hasField(std.builtin.Type.Struct, "fields");
 
 /// Version-independent reflection metadata for one struct field.
-pub const StructField = struct {
+const StructField = struct {
     name: [:0]const u8,
     type: type,
     default_value_ptr: ?*const anyopaque,
@@ -18,13 +18,13 @@ pub const StructField = struct {
 };
 
 /// Version-independent reflection metadata for one enum field.
-pub const EnumField = struct {
+const EnumField = struct {
     name: [:0]const u8,
     value: comptime_int,
 };
 
 /// Version-independent reflection metadata for one union field.
-pub const UnionField = struct {
+const UnionField = struct {
     name: [:0]const u8,
     type: type,
 };
@@ -223,7 +223,7 @@ pub fn isString(comptime T: type) bool {
 }
 
 /// Returns whether a string type can borrow directly from the JSON input.
-pub fn canBorrowString(comptime T: type) bool {
+fn canBorrowString(comptime T: type) bool {
     const info = @typeInfo(T);
 
     if (info != .pointer)
@@ -242,7 +242,7 @@ pub fn canBorrowString(comptime T: type) bool {
 }
 
 /// Returns whether deserializing `T` requires sentinel-terminated storage.
-pub fn requiresStringSentinel(comptime T: type) bool {
+fn requiresStringSentinel(comptime T: type) bool {
     const info = @typeInfo(T);
 
     if (info != .pointer)
@@ -260,7 +260,7 @@ pub fn requiresStringSentinel(comptime T: type) bool {
 }
 
 /// Returns whether `T` may require runtime-sized storage during deserialization.
-pub fn isDynamic(comptime T: type) bool {
+fn isDynamic(comptime T: type) bool {
     return switch (typeKind(T)) {
         .bool,
         .int,

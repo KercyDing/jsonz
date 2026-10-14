@@ -47,11 +47,13 @@ pub const parseBorrowed = document.parseBorrowed;
 pub const parseMut = document_mut.parse;
 
 test {
-    _ = common;
-    _ = document;
-    _ = document_mut;
-    _ = pool;
-    _ = reader;
-    _ = rfc;
-    _ = encode;
+    const std = @import("std");
+
+    std.testing.refAllDecls(common);
+    std.testing.refAllDecls(document);
+    std.testing.refAllDecls(document_mut);
+    std.testing.refAllDecls(pool);
+    std.testing.refAllDecls(reader);
+    std.testing.refAllDecls(rfc);
+    std.testing.refAllDecls(encode);
 }

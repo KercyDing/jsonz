@@ -178,3 +178,34 @@ test "caller buffer output" {
     defer testing.allocator.free(output);
     try testing.expectEqualStrings(input, output);
 }
+
+test "escape boundaries" {
+    var bytes: [41]u8 = undefined;
+    for (0..bytes.len + 1) |len| {
+        @memset(bytes[0..len], 'a');
+        const plain = try typed.toSlice(testing.allocator, @as([]const u8, bytes[0..len]), .{});
+        defer testing.allocator.free(plain);
+        var expected: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer expected.deinit();
+        try std.json.Stringify.value(@as([]const u8, bytes[0..len]), .{}, &expected.writer);
+        try testing.expectEqualStrings(expected.written(), plain);
+        for (0..len) |position| {
+            for (0..34) |special| {
+                bytes[position] = if (special < 32) @intCast(special) else if (special == 32) '"' else '\\';
+                const input: []const u8 = bytes[0..len];
+                const output = try typed.toSlice(testing.allocator, input, .{});
+                defer testing.allocator.free(output);
+                expected.writer.end = 0;
+                try std.json.Stringify.value(input, .{}, &expected.writer);
+                try testing.expectEqualStrings(expected.written(), output);
+            }
+            bytes[position] = 'a';
+        }
+    }
+    const mixed: []const u8 = "中文\\\n\"中文\t\r\x00\\\\\"";
+    const output = try typed.toSlice(testing.allocator, mixed, .{});
+    defer testing.allocator.free(output);
+    var parsed = try typed.parse([]const u8, testing.allocator, output, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings(mixed, parsed.value);
+}

@@ -183,45 +183,51 @@ fn writeJsonString(writer: *std.Io.Writer, value: []const u8) std.Io.Writer.Erro
 
     var start: usize = 0;
     var index: usize = 0;
-    while (index < value.len) : (index += 1) {
-        while (index + 8 <= value.len) {
-            const bytes: @Vector(8, u8) = value[index..][0..8].*;
-            const special =
-                (bytes == @as(@Vector(8, u8), @splat('"'))) |
-                (bytes == @as(@Vector(8, u8), @splat('\\'))) |
-                (bytes < @as(@Vector(8, u8), @splat(0x20)));
-            if (@reduce(.Or, special)) break;
+    while (index + 8 <= value.len) {
+        const bytes: @Vector(8, u8) = value[index..][0..8].*;
+        const special =
+            (bytes == @as(@Vector(8, u8), @splat('"'))) |
+            (bytes == @as(@Vector(8, u8), @splat('\\'))) |
+            (bytes < @as(@Vector(8, u8), @splat(0x20)));
+        if (!@reduce(.Or, special)) {
             index += 8;
+            continue;
         }
-        if (index == value.len) break;
-
-        const byte = value[index];
-        const escape: ?[]const u8 = switch (byte) {
-            '"' => "\\\"",
-            '\\' => "\\\\",
-            '\n' => "\\n",
-            '\r' => "\\r",
-            '\t' => "\\t",
-            0x08 => "\\b",
-            0x0c => "\\f",
-            0x00...0x07, 0x0b, 0x0e...0x1f => null,
-            else => continue,
-        };
-
+        // A special byte is guaranteed within this block.
+        while (value[index] >= 0x20 and value[index] != '"' and value[index] != '\\') : (index += 1) {}
         if (index > start) try writer.writeAll(value[start..index]);
-        if (escape) |text| {
-            try writer.writeAll(text);
-        } else {
-            const hex = "0123456789abcdef";
-            try writer.writeAll("\\u00");
-            try writer.writeByte(hex[byte >> 4]);
-            try writer.writeByte(hex[byte & 0x0f]);
-        }
+        try writeStringEscape(writer, value[index]);
+        index += 1;
+        start = index;
+    }
+    while (index < value.len) : (index += 1) {
+        const byte = value[index];
+        if (byte >= 0x20 and byte != '"' and byte != '\\') continue;
+        if (index > start) try writer.writeAll(value[start..index]);
+        try writeStringEscape(writer, byte);
         start = index + 1;
     }
 
     if (start < value.len) try writer.writeAll(value[start..]);
     try writer.writeByte('"');
+}
+
+inline fn writeStringEscape(writer: *std.Io.Writer, byte: u8) std.Io.Writer.Error!void {
+    switch (byte) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        0x08 => try writer.writeAll("\\b"),
+        0x0c => try writer.writeAll("\\f"),
+        else => {
+            const hex = "0123456789abcdef";
+            try writer.writeAll("\\u00");
+            try writer.writeByte(hex[byte >> 4]);
+            try writer.writeByte(hex[byte & 0x0f]);
+        },
+    }
 }
 
 /// Serializes a Zig value directly to `writer`.

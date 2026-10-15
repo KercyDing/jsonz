@@ -278,7 +278,7 @@ pub const Cursor = struct {
         return true;
     }
 
-    fn scanString(self: *Cursor) Error![]const u8 {
+    inline fn scanString(self: *Cursor) Error![]const u8 {
         const input = self.input;
         var pos = self.pos + 1;
         const start = pos;

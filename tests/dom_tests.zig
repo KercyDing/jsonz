@@ -617,6 +617,67 @@ test "mutable edits" {
     try expectSerializedPretty(&mutable);
 }
 
+test "mutable setters" {
+    var mutable = try dom.parseMut(
+        testing.allocator,
+        "{\"before\":0,\"age\":{\"old\":18},\"age\":99,\"after\":1}",
+        .{},
+    );
+    defer mutable.deinit();
+    const root = mutable.root();
+    const age = try root.field("age");
+
+    try root.setNumber("age", 20);
+    try testing.expectEqual(@as(u8, 20), try age.toNumber(.u8));
+    try root.setString("age", "twenty");
+    try testing.expectEqualStrings("twenty", try age.toString());
+    try root.setBool("age", true);
+    try testing.expect(try age.toBool());
+    try root.setNull("age");
+    try testing.expect(age.isNull());
+    try expectSerialized(&mutable, "{\"before\":0,\"age\":null,\"age\":99,\"after\":1}");
+
+    try root.setNull("nil");
+    try root.setBool("active", false);
+    try root.setNumber("score", @as(f64, -1.5));
+    var text = [_]u8{ 'x', '\n', '"' };
+    try root.setString("a/b~c", &text);
+    text[0] = 'y';
+    try testing.expectEqualStrings("x\n\"", try (try root.field("a/b~c")).toString());
+    try expectSerialized(
+        &mutable,
+        "{\"before\":0,\"age\":null,\"age\":99,\"after\":1,\"nil\":null,\"active\":false,\"score\":-1.5,\"a/b~c\":\"x\\n\\\"\"}",
+    );
+
+    age.remove();
+    try testing.expectEqual(@as(u8, 99), try (try root.field("age")).toNumber(.u8));
+    var frozen = try mutable.toDocument(testing.allocator);
+    defer frozen.deinit();
+    try testing.expectEqual(@as(u8, 99), try (try frozen.field("age")).toNumber(.u8));
+}
+
+test "mutable setter errors" {
+    for ([_][]const u8{ "[]", "null", "true", "1", "\"text\"" }) |input| {
+        var mutable = try dom.parseMut(testing.allocator, input, .{});
+        defer mutable.deinit();
+        const root = mutable.root();
+        try testing.expectError(error.UnexpectedType, root.setNull("k"));
+        try testing.expectError(error.UnexpectedType, root.setBool("k", false));
+        try testing.expectError(error.UnexpectedType, root.setNumber("k", 20));
+        try testing.expectError(error.UnexpectedType, root.setString("k", "v"));
+        try expectSerialized(&mutable, input);
+    }
+
+    var mutable = try dom.parseMut(testing.allocator, "{\"age\":18}", .{});
+    defer mutable.deinit();
+    for ([_][]const u8{ "age", "missing" }) |key| {
+        try testing.expectError(error.OutOfRange, mutable.root().setNumber(key, std.math.inf(f64)));
+        try testing.expectError(error.OutOfRange, mutable.root().setNumber(key, std.math.nan(f64)));
+        try testing.expectError(error.OutOfRange, mutable.root().setNumber(key, @as(u128, 1) << 100));
+        try expectSerialized(&mutable, "{\"age\":18}");
+    }
+}
+
 test "mutable removals" {
     var document = try dom.parse(testing.allocator, "{\"a\":1,\"b\":2,\"c\":[1,2,3,4]}", .{});
     defer document.deinit();

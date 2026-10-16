@@ -350,6 +350,10 @@ different document reports `error.DifferentStorage`.
 | `addBool(key, value)` | Append an object member whose value is a boolean. |
 | `addNumber(key, value)` | Append an object member whose value is a number. |
 | `addString(key, value)` | Append an object member whose value is a string. |
+| `setNull(key)` | Set the first matching object member to `null`, or append it if absent. |
+| `setBool(key, value)` | Set the first matching object member to a boolean, or append it if absent. |
+| `setNumber(key, value)` | Set the first matching object member to a number, or append it if absent. |
+| `setString(key, value)` | Set the first matching object member to a copied string, or append it if absent. |
 | `append(value)` | Append an array element. |
 | `appendNull()` | Append a `null` array element. |
 | `appendBool(value)` | Append a boolean array element. |
@@ -364,6 +368,22 @@ Convenience methods create the value and attach it in one call:
 | `addNull`, `addBool`, `addNumber`, `addString` | `new*` + `addField` |
 | `appendNull`, `appendBool`, `appendNumber`, `appendString` | `new*` + `append` |
 
+Use `set*` to assign a scalar field whether or not it already exists:
+
+```zig
+const user = try mutable.root().field("user");
+try user.setNumber("age", 20);
+try user.setString("name", "Alice");
+```
+
+`set*` only edits the current object; keys are literal names, not paths.
+An existing field keeps its node identity and position, even when its type
+changes. Only the first matching member is updated; later duplicates remain.
+A missing field is appended. Non-object receivers report `error.UnexpectedType`.
+Lookup is linear in the number of members. Updating an existing null, boolean,
+or number needs no allocation; strings are copied and appending may allocate.
+Numbers follow `replaceNumber`'s range rules.
+
 ### Mutation behavior
 
 | Operation | Behavior |
@@ -371,7 +391,7 @@ Convenience methods create the value and attach it in one call:
 | `remove()` | Detaches the node; removing an object value also removes its key. Removing the root does nothing. |
 | `replace*()` / `replace()` | Keeps the node's position and changes its value. |
 | `copyFrom()` | Copies a subtree, including from another document. |
-| Duplicate object key | Appends another member; lookup returns the first one. |
+| Duplicate object key | `add*` appends another member; lookup and `set*` select the first match. |
 | Detached node | Remains valid and can be attached again. |
 
 ### Mutation errors

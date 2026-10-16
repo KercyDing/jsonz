@@ -439,6 +439,46 @@ pub fn addString(self: NodeMut, key: []const u8, value: []const u8) !void {
     return self.addMember(key, try storeStringNode(self.storage, value));
 }
 
+/// Sets the first matching object member to `null`, or appends it if absent.
+pub fn setNull(self: NodeMut, key: []const u8) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    if (getObjectUnchecked(self, key)) |existing| {
+        existing.replaceNull();
+    } else {
+        try self.addNull(key);
+    }
+}
+
+/// Sets the first matching object member to a boolean, or appends it if absent.
+pub fn setBool(self: NodeMut, key: []const u8, value: bool) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    if (getObjectUnchecked(self, key)) |existing| {
+        existing.replaceBool(value);
+    } else {
+        try self.addBool(key, value);
+    }
+}
+
+/// Sets the first matching object member to a number, or appends it if absent.
+pub fn setNumber(self: NodeMut, key: []const u8, value: anytype) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    if (getObjectUnchecked(self, key)) |existing| {
+        try existing.replaceNumber(value);
+    } else {
+        try self.addNumber(key, value);
+    }
+}
+
+/// Sets the first matching object member to a copied string, or appends it if absent.
+pub fn setString(self: NodeMut, key: []const u8, value: []const u8) !void {
+    if (!self.isObject()) return error.UnexpectedType;
+    if (getObjectUnchecked(self, key)) |existing| {
+        try existing.replaceString(value);
+    } else {
+        try self.addString(key, value);
+    }
+}
+
 /// Appends an array element. `value` must be a detached node of this document.
 pub fn append(self: NodeMut, value: NodeMut) MutateError!void {
     if (!self.isArray()) return error.UnexpectedType;

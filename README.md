@@ -40,7 +40,7 @@ See [API.md](API.md) for the full public API, ownership rules, and error values.
 ## Benchmarks
 
 <p>
-  <img src="https://github.com/KercyDing/json-bench/releases/download/20261004-52c64c6/ranking.png" />
+  <img src="https://github.com/KercyDing/json-bench/releases/download/20261016-b3e9041-22/ranking.png" />
 </p>
 
 Visit [json-bench](https://github.com/KercyDing/json-bench) for more details.

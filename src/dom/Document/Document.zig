@@ -41,6 +41,12 @@ pub fn root(self: *const Document) Node {
     return .{ .storage = &self.storage, .index = self.root_index };
 }
 
+/// Returns an iterator over every value of the document, in document order.
+/// Object member names are skipped; see `Node.values`.
+pub fn values(self: *const Document) Node.ValueIterator {
+    return self.root().values();
+}
+
 /// Copies this document into a new mutable document. The original stays
 /// valid; the mutable tree owns its own nodes and strings.
 pub fn toMut(self: *const Document, allocator: std.mem.Allocator) std.mem.Allocator.Error!document_mut.DocumentMut {
@@ -279,14 +285,14 @@ pub fn parseInto(
 /// more than `16 * input_len` bytes, plus the input copy and alignment padding.
 pub fn parseBufferSize(input_len: usize, options: ParseOptions) usize {
     _ = options;
-    const values = std.math.mul(usize, input_len, pool_mod.node_size) catch
+    const pool_bytes = std.math.mul(usize, input_len, pool_mod.node_size) catch
         return std.math.maxInt(usize);
     // Four bytes of reader padding, plus alignment and slack.
     const total = std.math.add(usize, input_len, 4) catch
         return std.math.maxInt(usize);
-    const with_values = std.math.add(usize, total, values) catch
+    const with_pool = std.math.add(usize, total, pool_bytes) catch
         return std.math.maxInt(usize);
-    return std.math.add(usize, with_values, 64) catch std.math.maxInt(usize);
+    return std.math.add(usize, with_pool, 64) catch std.math.maxInt(usize);
 }
 
 /// Whether the document is indented rather than compact: a container opener
@@ -348,4 +354,97 @@ test "invalid input" {
     try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "{", .{}));
     try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "[1]x", .{}));
     try std.testing.expectError(error.InvalidJson, parse(std.testing.allocator, "[1 2]", .{}));
+}
+
+/// One letter per yielded value: o, a, n, s, b or 0.
+fn sequenceOf(iterator: Node.ValueIterator) []const u8 {
+    var remaining = iterator;
+    var sequence: [64]u8 = undefined;
+    var length: usize = 0;
+    while (remaining.next()) |value| {
+        sequence[length] = switch (value.kind()) {
+            .object => 'o',
+            .array => 'a',
+            .number => 'n',
+            .string => 's',
+            .bool => 'b',
+            .null => '0',
+        };
+        length += 1;
+    }
+    return std.testing.allocator.dupe(u8, sequence[0..length]) catch unreachable;
+}
+
+test "values walks the document and skips keys" {
+    var document = try parse(
+        std.testing.allocator,
+        "{\"a\": [1, 2], \"b\": true, \"c\": {}, \"d\": [], \"e\": null, \"f\": \"text\"}",
+        .{},
+    );
+    defer document.deinit();
+
+    const sequence = sequenceOf(document.values());
+    defer std.testing.allocator.free(sequence);
+    try std.testing.expectEqualStrings("oannboa0s", sequence);
+}
+
+test "values handles scalar and empty roots" {
+    const cases = [_]struct { input: []const u8, sequence: []const u8 }{
+        .{ .input = "{}", .sequence = "o" },
+        .{ .input = "[]", .sequence = "a" },
+        .{ .input = "1", .sequence = "n" },
+        .{ .input = "\"text\"", .sequence = "s" },
+        .{ .input = "true", .sequence = "b" },
+        .{ .input = "null", .sequence = "0" },
+    };
+    for (cases) |case| {
+        var document = try parse(std.testing.allocator, case.input, .{});
+        defer document.deinit();
+        const sequence = sequenceOf(document.values());
+        defer std.testing.allocator.free(sequence);
+        try std.testing.expectEqualStrings(case.sequence, sequence);
+    }
+}
+
+test "values walks one subtree" {
+    var document = try parse(
+        std.testing.allocator,
+        "{\"a\": {\"b\": [1, {\"c\": 2}]}, \"d\": 3}",
+        .{},
+    );
+    defer document.deinit();
+
+    const whole = sequenceOf(document.values());
+    defer std.testing.allocator.free(whole);
+    try std.testing.expectEqualStrings("ooanonn", whole);
+
+    const inner = sequenceOf((try document.root().ptrGet("/a/b")).values());
+    defer std.testing.allocator.free(inner);
+    try std.testing.expectEqualStrings("anon", inner);
+
+    const leaf = sequenceOf((try document.root().ptrGet("/d")).values());
+    defer std.testing.allocator.free(leaf);
+    try std.testing.expectEqualStrings("n", leaf);
+}
+
+test "values skips escaped keys" {
+    var document = try parse(std.testing.allocator, "{\"a\\\"b\": 1, \"c\": 2}", .{});
+    defer document.deinit();
+    const sequence = sequenceOf(document.values());
+    defer std.testing.allocator.free(sequence);
+    try std.testing.expectEqualStrings("onn", sequence);
+}
+
+test "values skips keys after a mutable round trip" {
+    var document = try parse(std.testing.allocator, "{\"a\": [1, {\"b\": 2}]}", .{});
+    defer document.deinit();
+
+    var mutable = try document.toMut(std.testing.allocator);
+    defer mutable.deinit();
+    var rebuilt = try mutable.toDocument(std.testing.allocator);
+    defer rebuilt.deinit();
+
+    const sequence = sequenceOf(rebuilt.values());
+    defer std.testing.allocator.free(sequence);
+    try std.testing.expectEqualStrings("oanon", sequence);
 }

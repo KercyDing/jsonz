@@ -67,6 +67,26 @@ pub const ArrayIterator = struct {
     }
 };
 
+/// Iterator over every value of a subtree in document order; a linear scan of
+/// the pool, skipping object member names.
+pub const ValueIterator = struct {
+    storage: *const Storage,
+    cursor: u32,
+    /// One past the subtree's last slot.
+    end: u32,
+
+    /// Returns the next value, or `null` at the end.
+    pub fn next(self: *ValueIterator) ?Node {
+        while (self.cursor < self.end) {
+            const index = self.cursor;
+            self.cursor += 1;
+            if (pool_mod.isKey(self.storage.nodes[index])) continue;
+            return .{ .storage = self.storage, .index = index };
+        }
+        return null;
+    }
+};
+
 fn raw(self: Node) *const pool_mod.NodeData {
     return &self.storage.nodes[self.index];
 }
@@ -217,6 +237,17 @@ pub fn arrayIterator(self: Node) AccessError!ArrayIterator {
         .storage = self.storage,
         .remaining = pool_mod.nodeLen(self.raw().*),
         .cursor = self.index + 1,
+    };
+}
+
+/// Returns an iterator over every value of this node's subtree, this node
+/// included, in document order. Object member names are skipped, so
+/// `{"a": [1, 2], "b": true}` yields the object, the array, `1`, `2` and `true`.
+pub fn values(self: Node) ValueIterator {
+    return .{
+        .storage = self.storage,
+        .cursor = self.index,
+        .end = self.index + subtreeLength(self.storage, self.index),
     };
 }
 

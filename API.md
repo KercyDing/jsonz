@@ -190,6 +190,7 @@ writing JSON values.
 | `get(key)`, `field(key)` | Root object member. |
 | `getAt(index)`, `at(index)` | Root array element. |
 | `objectIterator()`, `arrayIterator()` | Root container iteration. |
+| `values()` | Every value of the document, in document order. |
 | `ptrGet(ptr)`, `ptrGetFmt(fmt, args)`, `ptrGetDyn(ptr)` | Root JSON Pointer. |
 | `toSlice(allocator, options)`, `toWriter(writer, options)` | Serialize the root. |
 | `toMut(allocator)` | Copy the document into a new `DocumentMut`. |
@@ -235,6 +236,7 @@ Containers:
 | `at(index)` | `AccessError!Node` | Not an array, or out of range. |
 | `objectIterator()` | `AccessError!ObjectIterator` | Not an object. |
 | `arrayIterator()` | `AccessError!ArrayIterator` | Not an array. |
+| `values()` | `ValueIterator` | — |
 
 Iteration:
 
@@ -249,7 +251,26 @@ var elements = try view.arrayIterator();
 while (elements.next()) |element| {
     _ = element; // Node
 }
+
+var values = view.values();
+while (values.next()) |value| {
+    _ = value; // Node
+}
 ```
+
+`values()` walks every value of the subtree in document order. The pool stores
+a subtree as one contiguous run of slots, so the iterator is a linear scan with
+no stack, no allocation and no call per value. For
+
+```json
+{"a": [1, 2], "b": true}
+```
+
+it yields the object, the array, `1`, `2` and `true`. Containers are yielded
+too, and object member names are skipped because a name is not a value.
+`Node.values()` starts at that node; `Document.values()` starts at the root.
+Use it to aggregate, validate, count or collect; use `objectIterator()` and
+`arrayIterator()` when the tree shape matters.
 
 Serialization:
 

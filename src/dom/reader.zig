@@ -21,6 +21,12 @@ inline fn specialMask(bytes: ScanVector) u32 {
     return @bitCast(quote | escape | control | high);
 }
 
+/// The tag for a scanned string; an object member's name carries the key flag.
+inline fn stringTag(len: usize, subtype: pool_mod.Subtype, key: bool) pool_mod.Tag {
+    const tag = pool_mod.makeTag(.string, subtype, len);
+    return if (key) pool_mod.markKey(tag) else tag;
+}
+
 /// True for the four JSON whitespace bytes.
 ///
 /// A table lookup keeps the skip loop to one load, one test and one branch per
@@ -337,7 +343,7 @@ pub fn Reader(comptime Sink: type) type {
                                 break :run;
                             }
                             if (byte != '"') return error.InvalidJson;
-                            const key = try self.scanString(current, pos);
+                            const key = try self.scanString(current, pos, true);
                             pos = key.pos;
                             count += 1;
                             pos = try self.skipTrivia(pos);
@@ -431,7 +437,7 @@ pub fn Reader(comptime Sink: type) type {
         /// Scans one scalar; containers are handled by the state machine.
         inline fn scanScalar(self: *Self, parent: ?u32, pos: usize) Error!Scan {
             switch (self.input[pos]) {
-                '"' => return self.scanString(parent, pos),
+                '"' => return self.scanString(parent, pos, false),
                 't' => return self.scanLiteral(parent, pos, "true", .bool, pool_mod.true_flag, 1),
                 'f' => return self.scanLiteral(parent, pos, "false", .bool, pool_mod.false_flag, 0),
                 'n' => return self.scanLiteral(parent, pos, "null", .null, .none, 0),
@@ -453,7 +459,7 @@ pub fn Reader(comptime Sink: type) type {
                     return .{ .index = opened.index, .pos = opened.pos, .container = opened.state };
                 },
                 '"' => {
-                    const scanned = try self.scanString(parent, pos);
+                    const scanned = try self.scanString(parent, pos, false);
                     return .{ .index = scanned.index, .pos = scanned.pos, .container = null };
                 },
                 't' => {
@@ -592,7 +598,7 @@ pub fn Reader(comptime Sink: type) type {
         /// Strings without escapes take a scan-only path. Plain 32-byte chunks are
         /// skipped with SIMD; a chunk holding a quote, escape, control byte, or
         /// non-ASCII byte is walked byte by byte before the vector scan resumes.
-        inline fn scanString(self: *Self, parent: ?u32, start: usize) Error!Scan {
+        inline fn scanString(self: *Self, parent: ?u32, start: usize, key: bool) Error!Scan {
             const input = self.input;
             const text_start = start + 1;
             var scan = text_start;
@@ -612,7 +618,7 @@ pub fn Reader(comptime Sink: type) type {
                     const byte = input[scan];
                     if (byte == '"') {
                         return .{
-                            .index = try self.append(parent, pool_mod.makeTag(.string, pool_mod.no_escape, scan - text_start), .{ .offset = text_start }),
+                            .index = try self.append(parent, stringTag(scan - text_start, pool_mod.no_escape, key), .{ .offset = text_start }),
                             .pos = scan + 1,
                         };
                     }
@@ -668,7 +674,7 @@ pub fn Reader(comptime Sink: type) type {
                     switch (byte) {
                         '"' => {
                             return .{
-                                .index = try self.append(parent, pool_mod.makeTag(.string, .none, write - text_start), .{ .offset = text_start }),
+                                .index = try self.append(parent, stringTag(write - text_start, .none, key), .{ .offset = text_start }),
                                 .pos = pos + 1,
                             };
                         },

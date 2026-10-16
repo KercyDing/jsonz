@@ -80,6 +80,8 @@ const CompactFrame = struct {
     remaining: usize,
     /// The container's compact index, patched when it closes.
     index: u32,
+    /// Whether the children alternate member name and value.
+    object: bool,
 };
 
 /// The number of slots a container's children occupy; null for a scalar.
@@ -503,7 +505,12 @@ pub fn toCompact(
     defer stack.deinit(allocator);
     if (childSlots(root_node)) |slots| {
         try stack.ensureTotalCapacity(allocator, 32);
-        try stack.append(allocator, .{ .source = head(root_node), .remaining = slots, .index = 0 });
+        try stack.append(allocator, .{
+            .source = head(root_node),
+            .remaining = slots,
+            .index = 0,
+            .object = root_node.tag.type == .object,
+        });
     }
 
     while (stack.items.len != 0) {
@@ -521,12 +528,18 @@ pub fn toCompact(
         frame.remaining -= 1;
 
         const index: u32 = @intCast(nodes.items.len);
-        try nodes.append(allocator, compactNode(source[child]));
+        var copied = compactNode(source[child]);
+        // Member names keep the key flag.
+        if (frame.object and !isMemberValue(source[child])) {
+            copied.tag.reserved = pool_mod.key_flag;
+        }
+        try nodes.append(allocator, copied);
         if (childSlots(source[child])) |slots| {
             try stack.append(allocator, .{
                 .source = head(source[child]),
                 .remaining = slots,
                 .index = index,
+                .object = source[child].tag.type == .object,
             });
         }
     }

@@ -87,6 +87,22 @@ pub fn nodeLen(node: NodeData) usize {
     return node.tag.len;
 }
 
+/// The tag bit of an object member's name. A name is not a value, so
+/// `Node.values` skips it; the mutable storage uses bit 0 for itself.
+pub const key_flag: u3 = 2;
+
+/// Returns whether this node holds an object member's name.
+pub fn isKey(node: NodeData) bool {
+    return node.tag.reserved & key_flag != 0;
+}
+
+/// Returns `tag` marked as an object member's name.
+pub fn markKey(tag: Tag) Tag {
+    var marked = tag;
+    marked.reserved = key_flag;
+    return marked;
+}
+
 /// The byte distance between two node indices.
 pub fn byteOffset(from: u32, to: u32) u64 {
     return (@as(u64, to) - @as(u64, from)) * node_size;

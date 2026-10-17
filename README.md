@@ -39,11 +39,9 @@ See [API.md](API.md) for the full public API, ownership rules, and error values.
 
 ## Benchmarks
 
-<p>
-  <img src="https://github.com/KercyDing/json-bench/releases/download/20261016-b3e9041-22/ranking.png" />
-</p>
+![JSON DOM benchmark rankings](https://github.com/KercyDing/json-bench/releases/download/20261016-b3e9041-22/ranking.png)
 
-Visit [json-bench](https://github.com/KercyDing/json-bench) for more details.
+See [json-bench](https://github.com/KercyDing/json-bench) for detailed results, or [GLD.SerializerBenchmark](https://leo-gan.github.io/GLD.SerializerBenchmark/dashboard/?lang=all&dataset=suite&data=all%40all&standard=json&mode=published&metric=ops&baseline=cpp%7Cglaze) for independent multi-language benchmarks.
 
 ## Quick Start
 

@@ -222,7 +222,7 @@ thread-safe; synchronize access when sharing it between threads.
 
 Development commands use [only](https://github.com/KercyDing/only) and
 [mise](https://github.com/jdx/mise). `mise` provides the Zig version; this project
-targets Zig `0.17.0` by default.
+targets Zig `0.17.1` by default.
 
 ```sh
 only build             # debug build

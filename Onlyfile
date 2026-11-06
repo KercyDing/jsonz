@@ -24,11 +24,10 @@ bench(mode = "dom"):
     zig build bench -Dmode={{mode}}
 
 [help] Build in release mode
-[desc] Run `only release false` to turn off the strip.
 [pass] Release build complete.
 [fail] Release build failed.
-release(strip = "true"):
-    zig build -Doptimize=fast -Dstrip={{strip}}
+build-release():
+    zig build -Doptimize=ReleaseFast -Dstrip=true
 
 [help] Zig 0.16.0 tasks
 group zig16 {
@@ -46,21 +45,20 @@ group zig16 {
         mise -E zig16 exec -- zig build test
 
     [help] Build in release mode with Zig 0.16.0
-    [desc] Run `only zig16 release false` to turn off the strip.
     [pass] Zig 0.16.0 release build complete.
     [fail] Zig 0.16.0 release build failed.
-    release(strip = "true"):
-        mise -E zig16 exec -- zig build -Doptimize=ReleaseFast -Dstrip={{strip}}
+    build-release():
+        mise -E zig16 exec -- zig build -Doptimize=ReleaseFast -Dstrip=true
 }
 
 [help] Format source and build files
 [pass] Formatting complete.
 [fail] Formatting failed.
 fmt():
-    zig fmt src tests benchmarks build.zig build.zig.zon
+    zig fmt .
 
 [help] Clean cache, build output and packages
 [pass] Clean complete.
 [fail] Clean failed.
 clean():
-    rm -rf .zig-cache zig-out
+    rm -rf .zig-cache zig-out zig-pkg

@@ -65,6 +65,9 @@ pub const Options = struct {
     allow_comments: bool = false,
     /// Accept a comma before a closing `]` or `}`, which is not part of standard JSON.
     allow_trailing_commas: bool = false,
+    /// Reject objects whose member names are not unique, as RFC 7493 I-JSON
+    /// requires. Off by default: RFC 8259 only says names SHOULD be unique.
+    reject_duplicate_keys: bool = false,
 };
 
 pub const Error = error{ InvalidJson, OutOfMemory };

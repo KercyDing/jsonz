@@ -164,6 +164,7 @@ writing JSON values.
 | --- | --- | --- |
 | `allow_comments` | `false` | Accept `//` and `/* ... */` comments. |
 | `allow_trailing_commas` | `false` | Accept a comma before `]` or `}`. |
+| `reject_duplicate_keys` | `false` | Reject an object with repeated member names, as RFC 7493 I-JSON requires. |
 
 ### Write options
 

@@ -574,6 +574,30 @@ pub fn parseInto(
     return parser.run();
 }
 
+/// Rejects repeated member names within any object of `storage`.
+///
+/// The mutable tree links object children as alternating key/value nodes, so a
+/// member scan needs no recursion and no extra storage.
+pub fn rejectDuplicateKeys(storage: *const StorageMut) reader.Error!void {
+    var seen = std.StringHashMap(void).init(storage.allocator);
+    defer seen.deinit();
+
+    for (storage.nodes.items) |node| {
+        if (nodeType(node) != .object) continue;
+        seen.clearRetainingCapacity();
+
+        var child = head(node);
+        var remaining = nodeLen(node);
+        while (remaining != 0) : (remaining -= 1) {
+            const key_node = &storage.nodes.items[child];
+            const value_index = key_node.next;
+            const inserted = try seen.getOrPut(stringAtMut(storage, key_node));
+            if (inserted.found_existing) return error.InvalidJson;
+            child = storage.nodes.items[value_index].next;
+        }
+    }
+}
+
 /// Creates a detached `null` node.
 pub fn createNull(storage: *StorageMut) !u32 {
     return appendNode(storage, .{

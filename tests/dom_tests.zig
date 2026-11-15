@@ -391,6 +391,32 @@ test "mutable parse rejects invalid JSON" {
     try expectSerialized(&document, "[1]");
 }
 
+test "duplicate keys are opt-in rejected" {
+    const duplicate = "{\"harbor\":1,\"harbor\":2}";
+
+    var accepted = try dom.parse(testing.allocator, duplicate, .{});
+    accepted.deinit();
+
+    try testing.expectError(
+        error.InvalidJson,
+        dom.parse(testing.allocator, duplicate, .{ .reject_duplicate_keys = true }),
+    );
+    try testing.expectError(
+        error.InvalidJson,
+        dom.parseMut(testing.allocator, duplicate, .{ .reject_duplicate_keys = true }),
+    );
+
+    var buffer: [duplicate.len + 4]u8 = undefined;
+    @memcpy(buffer[0..duplicate.len], duplicate);
+    @memset(buffer[duplicate.len..], 0);
+    try testing.expectError(
+        error.InvalidJson,
+        dom.parseBorrowed(testing.allocator, &buffer, duplicate.len, .{
+            .reject_duplicate_keys = true,
+        }),
+    );
+}
+
 test "borrowed DOM parse uses caller storage" {
     const input = "{\"name\":\"jsonz\",\"value\":\"a\\u00e9\"}";
     var buffer: [input.len + 4]u8 = undefined;

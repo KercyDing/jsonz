@@ -65,6 +65,7 @@ pub fn parse(
     errdefer storage.nodes.deinit(allocator);
     errdefer storage.input.deinit(allocator);
     storage.root = try storage_mod.parseInto(&storage, buffer, input.len, options);
+    if (options.reject_duplicate_keys) try storage_mod.rejectDuplicateKeys(&storage);
     return .{ .storage = storage };
 }
 

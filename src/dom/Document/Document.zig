@@ -201,24 +201,31 @@ pub fn parse(
     input: []const u8,
     options: ParseOptions,
 ) ParseError!Document {
-    // The reader needs four zero bytes past the text as scratch space, so its
-    // hot loops can skip bounds checks.
-    const owned = allocator.alloc(u8, input.len + 4) catch return error.OutOfMemory;
-    errdefer allocator.free(owned);
-    @memcpy(owned[0..input.len], input);
-    @memset(owned[input.len..], 0);
+    var document: Document = undefined;
+    {
+        // The reader needs four zero bytes past the text as scratch space, so its
+        // hot loops can skip bounds checks.
+        const owned = allocator.alloc(u8, input.len + 4) catch return error.OutOfMemory;
+        errdefer allocator.free(owned);
+        @memcpy(owned[0..input.len], input);
+        @memset(owned[input.len..], 0);
 
-    var pool = pool_mod.Pool.init(allocator, input.len, looksPretty(input)) catch
-        return error.OutOfMemory;
-    errdefer pool.deinit();
+        var pool = pool_mod.Pool.init(allocator, input.len, looksPretty(input)) catch
+            return error.OutOfMemory;
+        errdefer pool.deinit();
 
-    const root_index = try reader.read(&pool, owned, input.len, options);
-    return .{
-        .pool = pool,
-        .storage = .{ .nodes = pool.items(), .input = owned },
-        .owns_input = true,
-        .root_index = root_index,
-    };
+        const root_index = try reader.read(&pool, owned, input.len, options);
+        document = .{
+            .pool = pool,
+            .storage = .{ .nodes = pool.items(), .input = owned },
+            .owns_input = true,
+            .root_index = root_index,
+        };
+    }
+    errdefer document.deinit();
+
+    if (options.reject_duplicate_keys) try rejectDuplicateKeys(&document, allocator);
+    return document;
 }
 
 /// Parses JSON from caller-owned mutable storage without copying the input.
@@ -236,17 +243,24 @@ pub fn parseBorrowed(
     if (input_len > buffer.len or buffer.len - input_len < 4) return error.BufferTooSmall;
     if (!std.mem.allEqual(u8, buffer[input_len .. input_len + 4], 0)) return error.InvalidJson;
 
-    var pool = pool_mod.Pool.init(allocator, input_len, looksPretty(buffer[0..input_len])) catch
-        return error.OutOfMemory;
-    errdefer pool.deinit();
+    var document: Document = undefined;
+    {
+        var pool = pool_mod.Pool.init(allocator, input_len, looksPretty(buffer[0..input_len])) catch
+            return error.OutOfMemory;
+        errdefer pool.deinit();
 
-    const root_index = try reader.read(&pool, buffer, input_len, options);
-    return .{
-        .pool = pool,
-        .storage = .{ .nodes = pool.items(), .input = buffer[0..input_len] },
-        .owns_input = false,
-        .root_index = root_index,
-    };
+        const root_index = try reader.read(&pool, buffer, input_len, options);
+        document = .{
+            .pool = pool,
+            .storage = .{ .nodes = pool.items(), .input = buffer[0..input_len] },
+            .owns_input = false,
+            .root_index = root_index,
+        };
+    }
+    errdefer document.deinit();
+
+    if (options.reject_duplicate_keys) try rejectDuplicateKeys(&document, allocator);
+    return document;
 }
 
 /// Parses JSON into caller-provided storage.
@@ -270,12 +284,57 @@ pub fn parseInto(
     var pool = pool_mod.Pool.initFixed(storage[input.len + 4 ..]);
 
     const root_index = try reader.read(&pool, input_copy, input.len, options);
-    return .{
+    var document: Document = .{
         .pool = pool,
         .storage = .{ .nodes = pool.items(), .input = input_copy },
         .owns_input = false,
         .root_index = root_index,
     };
+    errdefer document.deinit();
+
+    // Fixed storage has no allocator, so the fallback compares members
+    // pairwise instead of building a set.
+    if (options.reject_duplicate_keys) try rejectDuplicateKeys(&document, null);
+    return document;
+}
+
+/// Rejects repeated member names within any object of `document`.
+///
+/// With an allocator, one set is reused for every object. Without one, each
+/// member is compared with the members before it, which keeps the fixed-storage
+/// path allocation-free at the cost of quadratic time in an object's width.
+fn rejectDuplicateKeys(document: *const Document, allocator: ?std.mem.Allocator) ParseError!void {
+    var walk = document.values();
+
+    if (allocator) |alloc| {
+        var seen = std.StringHashMap(void).init(alloc);
+        defer seen.deinit();
+
+        while (walk.next()) |value| {
+            if (!value.isObject()) continue;
+            seen.clearRetainingCapacity();
+            var fields = value.objectIterator() catch unreachable;
+            while (fields.next()) |entry| {
+                const inserted = try seen.getOrPut(entry.key);
+                if (inserted.found_existing) return error.InvalidJson;
+            }
+        }
+        return;
+    }
+
+    while (walk.next()) |value| {
+        if (!value.isObject()) continue;
+        var index: usize = 0;
+        var fields = value.objectIterator() catch unreachable;
+        while (fields.next()) |entry| : (index += 1) {
+            var earlier = value.objectIterator() catch unreachable;
+            var earlier_index: usize = 0;
+            while (earlier_index < index) : (earlier_index += 1) {
+                const previous = earlier.next().?;
+                if (std.mem.eql(u8, previous.key, entry.key)) return error.InvalidJson;
+            }
+        }
+    }
 }
 
 /// Returns the minimum storage size required by `parseInto` for this input
@@ -341,6 +400,51 @@ test "parse options" {
     });
     defer document.deinit();
     try std.testing.expectEqual(@as(u64, 1), try (try document.field("value")).toNumber(.u64));
+}
+
+test "reject duplicate keys" {
+    const duplicate = "{\"a\":1,\"\\u0061\":2}";
+    var accepted = try parse(std.testing.allocator, duplicate, .{});
+    accepted.deinit();
+
+    try std.testing.expectError(
+        error.InvalidJson,
+        parse(std.testing.allocator, duplicate, .{ .reject_duplicate_keys = true }),
+    );
+
+    const storage = try std.testing.allocator.alloc(
+        u8,
+        parseBufferSize(duplicate.len, .{ .reject_duplicate_keys = true }),
+    );
+    defer std.testing.allocator.free(storage);
+    try std.testing.expectError(
+        error.InvalidJson,
+        parseInto(storage, duplicate, .{ .reject_duplicate_keys = true }),
+    );
+
+    var unique = try parse(
+        std.testing.allocator,
+        "{\"a\":1,\"b\":{\"c\":2}}",
+        .{ .reject_duplicate_keys = true },
+    );
+    unique.deinit();
+
+    // The same name in separate objects is not a duplicate.
+    var siblings = try parse(
+        std.testing.allocator,
+        "{\"a\":{\"x\":1},\"b\":{\"x\":2}}",
+        .{ .reject_duplicate_keys = true },
+    );
+    siblings.deinit();
+
+    try std.testing.expectError(
+        error.InvalidJson,
+        parse(
+            std.testing.allocator,
+            "{\"outer\":{\"x\":1,\"x\":2}}",
+            .{ .reject_duplicate_keys = true },
+        ),
+    );
 }
 
 test "escaped keys are matched by content" {
